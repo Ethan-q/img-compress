@@ -1,50 +1,57 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
+import platform
+import shutil
 import stat
 import sys
+import tarfile
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, cast
 from urllib.request import Request, urlopen
 
 
 VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
-GITHUB_API = "https://api.github.com"
+NPM_REGISTRY = os.environ.get("NPM_REGISTRY", "https://registry.npmmirror.com").rstrip("/")
+BINARY_MIRROR = os.environ.get(
+    "BINARY_MIRROR", "https://cdn.npmmirror.com/binaries"
+).rstrip("/")
 PLATFORMS = ["windows", "macos", "linux"]
 ARCHS = ["x64", "arm64"]
 
 TOOLS = {
     "pngquant": {
-        "repo": "imagemin/pngquant-bin",
         "binary_names": ["pngquant"],
-        "source": "contents",
+        "npm_package": "pngquant-bin",
+        "mirror_name": "pngquant-bin",
     },
     "optipng": {
-        "repo": "imagemin/optipng-bin",
         "binary_names": ["optipng"],
-        "source": "contents",
+        "npm_package": "optipng-bin",
+        "mirror_name": "optipng-bin",
     },
     "cjpeg": {
-        "repo": "imagemin/mozjpeg-bin",
         "binary_names": ["cjpeg"],
-        "source": "contents",
+        "npm_package": "mozjpeg",
+        "mirror_name": "mozjpeg-bin",
     },
     "jpegtran": {
-        "repo": "imagemin/jpegtran-bin",
         "binary_names": ["jpegtran"],
-        "source": "contents",
+        "npm_package": "jpegtran-bin",
+        "mirror_name": "jpegtran-bin",
     },
     "gifsicle": {
-        "repo": "imagemin/gifsicle-bin",
         "binary_names": ["gifsicle"],
-        "source": "contents",
+        "npm_package": "gifsicle",
+        "mirror_name": "gifsicle-bin",
     },
     "cwebp": {
-        "repo": "imagemin/cwebp-bin",
         "binary_names": ["cwebp"],
-        "source": "contents",
+        "npm_package": "cwebp-bin",
+        "mirror_name": "cwebp-bin",
     },
 }
 
@@ -52,20 +59,73 @@ TOOLS = {
 def main() -> None:
     args = parse_args(sys.argv[1:])
     VENDOR_DIR.mkdir(parents=True, exist_ok=True)
+    current_platform = detect_platform()
+    current_arch = detect_arch()
+    missing: list[str] = []
     for name in args.tools:
         tool = TOOLS[name]
-        files = list_repo_files(tool["repo"], tool["source"])
-        for platform_key in args.platforms:
-            for arch_key in args.archs:
-                selected = select_binary(files, tool["binary_names"], platform_key, arch_key)
-                if not selected:
-                    raise RuntimeError(f"未找到可用二进制：{name} ({platform_key}/{arch_key})")
-                target_dir = VENDOR_DIR / platform_key / arch_key
-                target_dir.mkdir(parents=True, exist_ok=True)
-                target = target_dir / output_name(selected["name"], platform_key)
-                download(selected["download_url"], target)
-                ensure_executable(target, platform_key)
-                print(f"{name} -> {target}")
+        package = cast(str, tool["npm_package"])
+        tarball_url, package_version = resolve_npm_tarball(package)
+        tar_bytes = download_bytes(tarball_url)
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
+            version = read_package_version(tar) or package_version
+            members = [
+                m
+                for m in tar.getmembers()
+                if (m.isfile() or m.issym()) and "/vendor/" in m.name
+            ]
+            for platform_key in args.platforms:
+                for arch_key in args.archs:
+                    target_dir = VENDOR_DIR / platform_key / arch_key
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    payload = fetch_payload_from_sources(
+                        tar,
+                        members,
+                        tool,
+                        version,
+                        platform_key,
+                        arch_key,
+                    )
+                    used_fallback_arch = False
+                    if payload is None and is_local_target(
+                        platform_key, arch_key, current_platform, current_arch
+                    ):
+                        copied = copy_from_system(
+                            cast(list[str], tool["binary_names"]), target_dir, platform_key
+                        )
+                        if copied:
+                            print(f"{name} -> {copied}")
+                            continue
+                    if payload is None and platform_key == "windows" and arch_key == "arm64":
+                        payload = fetch_payload_from_sources(
+                            tar,
+                            members,
+                            tool,
+                            version,
+                            platform_key,
+                            "x64",
+                        )
+                        used_fallback_arch = payload is not None
+                    if payload is None:
+                        missing.append(f"{name} ({platform_key}/{arch_key})")
+                        if not args.allow_missing:
+                            raise RuntimeError(
+                                f"未找到可用二进制：{name} ({platform_key}/{arch_key})"
+                            )
+                        print(f"{name} 缺失，已跳过：{platform_key}/{arch_key}")
+                        continue
+                    target = target_dir / output_name(
+                        cast(list[str], tool["binary_names"])[0], platform_key
+                    )
+                    write_bytes(target, payload)
+                    ensure_executable(target, platform_key)
+                    if used_fallback_arch:
+                        print(f"{name} -> {target}（x64 回退）")
+                    else:
+                        print(f"{name} -> {target}")
+    if missing and not args.allow_missing:
+        missing_text = "，".join(missing)
+        raise RuntimeError(f"未找到可用二进制：{missing_text}")
 
 
 def parse_args(args: list[str]) -> argparse.Namespace:
@@ -74,6 +134,7 @@ def parse_args(args: list[str]) -> argparse.Namespace:
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--platforms", default="")
     parser.add_argument("--archs", default="")
+    parser.add_argument("--allow-missing", action="store_true")
     parsed = parser.parse_args(args)
     tools = list(TOOLS.keys()) if parsed.all or not parsed.tools else parsed.tools
     unknown = [tool for tool in tools if tool not in TOOLS]
@@ -97,42 +158,40 @@ def normalize_targets(raw: str, allowed: list[str], default_value: str) -> list[
     return values
 
 
-def list_repo_files(repo: str, source: str) -> list[dict[str, str]]:
-    if source == "contents":
-        return list_contents_recursive(repo, "vendor")
-    raise ValueError(f"不支持的资源类型：{source}")
-
-
-def list_contents_recursive(repo: str, path: str) -> list[dict[str, str]]:
-    url = f"{GITHUB_API}/repos/{repo}/contents/{path}"
-    payload = github_get(url)
-    files: list[dict[str, str]] = []
-    for item in payload:
-        if item.get("type") == "dir":
-            files.extend(list_contents_recursive(repo, item["path"]))
-        elif item.get("type") == "file" and item.get("download_url"):
-            files.append(
-                {
-                    "name": item["name"],
-                    "path": item["path"],
-                    "download_url": item["download_url"],
-                }
-            )
-    return files
-
-
 def select_binary(
-    files: Iterable[dict[str, str]],
+    files: Iterable[tarfile.TarInfo],
     names: list[str],
     platform_key: str,
     arch_key: str,
-) -> dict[str, str] | None:
-    candidates = [item for item in files if is_name_match(item["name"], names)]
+) -> tarfile.TarInfo | None:
+    candidates = [item for item in files if is_name_match(Path(item.name).name, names)]
     if not candidates:
         return None
-    scored = [(score_candidate(item, platform_key, arch_key), item) for item in candidates]
+    scored = [(score_candidate(item.name, platform_key, arch_key), item) for item in candidates]
     scored.sort(key=lambda item: item[0], reverse=True)
     return scored[0][1]
+
+
+def fetch_payload_from_sources(
+    tar: tarfile.TarFile,
+    members: list[tarfile.TarInfo],
+    tool: dict[str, object],
+    version: str,
+    platform_key: str,
+    arch_key: str,
+) -> bytes | None:
+    selected = select_binary(
+        members, cast(list[str], tool["binary_names"]), platform_key, arch_key
+    )
+    if selected:
+        return extract_member_bytes(tar, selected)
+    return try_download_from_mirror(tool, version, platform_key, arch_key)
+
+
+def is_local_target(
+    platform_key: str, arch_key: str, current_platform: str, current_arch: str
+) -> bool:
+    return platform_key == current_platform and arch_key == current_arch
 
 
 def detect_platform() -> str:
@@ -144,7 +203,10 @@ def detect_platform() -> str:
 
 
 def detect_arch() -> str:
-    machine = os.uname().machine.lower()
+    if hasattr(os, "uname"):
+        machine = os.uname().machine.lower()
+    else:
+        machine = platform.machine().lower()
     if machine in {"arm64", "aarch64"}:
         return "arm64"
     if machine in {"x86_64", "amd64"}:
@@ -152,8 +214,8 @@ def detect_arch() -> str:
     return machine
 
 
-def score_candidate(item: dict[str, str], platform_key: str, arch_key: str) -> int:
-    text = f"{item['name']} {item['path']}".lower()
+def score_candidate(text: str, platform_key: str, arch_key: str) -> int:
+    text = text.lower()
     score = 0
     score += match_score(text, platform_tokens(platform_key)) * 3
     score += match_score(text, arch_tokens(arch_key)) * 2
@@ -194,13 +256,46 @@ def output_name(filename: str, platform_key: str) -> str:
     return filename
 
 
-def download(url: str, target: Path) -> None:
-    request = Request(url, headers={"User-Agent": "imgcompress-fetcher"})
-    with urlopen(request) as response:
-        data = response.read()
+def write_bytes(target: Path, data: bytes) -> None:
     temp = target.with_suffix(target.suffix + ".partial")
     temp.write_bytes(data)
     temp.replace(target)
+
+
+def extract_member_bytes(
+    tar: tarfile.TarFile, member: tarfile.TarInfo, depth: int = 0
+) -> bytes | None:
+    if depth > 5:
+        return None
+    if member.isfile():
+        payload = tar.extractfile(member)
+        return payload.read() if payload else None
+    if member.issym():
+        resolved = resolve_symlink_member(tar, member)
+        if resolved is None:
+            return None
+        return extract_member_bytes(tar, resolved, depth + 1)
+    return None
+
+
+def resolve_symlink_member(
+    tar: tarfile.TarFile, member: tarfile.TarInfo
+) -> tarfile.TarInfo | None:
+    if not member.linkname:
+        return None
+    if member.linkname.startswith("http"):
+        return None
+    if member.linkname.startswith("package/"):
+        link_target = member.linkname
+    else:
+        base = Path(member.name).parent
+        link_target = str((base / member.linkname).as_posix())
+    if link_target.startswith("./"):
+        link_target = link_target[2:]
+    try:
+        return tar.getmember(link_target)
+    except KeyError:
+        return None
 
 
 def ensure_executable(path: Path, platform_key: str) -> None:
@@ -210,7 +305,103 @@ def ensure_executable(path: Path, platform_key: str) -> None:
     path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def github_get(url: str) -> list[dict]:
+def copy_from_system(names: list[str], target_dir: Path, platform_key: str) -> Path | None:
+    for name in names:
+        system_path = shutil.which(name)
+        if not system_path:
+            continue
+        source = Path(system_path)
+        target = target_dir / output_name(source.name, platform_key)
+        write_bytes(target, source.read_bytes())
+        ensure_executable(target, platform_key)
+        return target
+    return None
+
+
+def resolve_npm_tarball(package: str) -> tuple[str, str]:
+    url = f"{NPM_REGISTRY}/{package}/latest"
+    payload = json_get(url)
+    dist = payload.get("dist") or {}
+    tarball = dist.get("tarball")
+    if not tarball:
+        raise RuntimeError(f"无法获取 tarball 地址：{package}")
+    version = payload.get("version") or ""
+    return tarball, version
+
+
+def read_package_version(tar: tarfile.TarFile) -> str:
+    try:
+        member = tar.getmember("package/package.json")
+    except KeyError:
+        return ""
+    payload = tar.extractfile(member)
+    if payload is None:
+        return ""
+    try:
+        data = json.loads(payload.read().decode("utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    return data.get("version", "")
+
+
+def try_download_from_mirror(
+    tool: dict[str, object],
+    version: str,
+    platform_key: str,
+    arch_key: str,
+) -> bytes | None:
+    mirror_name = cast(str | None, tool.get("mirror_name"))
+    if not mirror_name or not version:
+        return None
+    base = f"{BINARY_MIRROR}/{mirror_name}/v{version}"
+    binary_name = cast(list[str], tool["binary_names"])[0]
+    binary_name_windows = f"{binary_name}.exe"
+    candidates = [
+        f"{base}/vendor/{platform_key}/{arch_key}/{binary_name}",
+        f"{base}/vendor/{platform_key}/{binary_name}",
+    ]
+    if platform_key == "macos":
+        candidates.extend(
+            [
+                f"{base}/vendor/darwin/{arch_key}/{binary_name}",
+                f"{base}/vendor/darwin/{binary_name}",
+                f"{base}/vendor/osx/{arch_key}/{binary_name}",
+                f"{base}/vendor/osx/{binary_name}",
+            ]
+        )
+    if platform_key == "windows":
+        candidates.extend(
+            [
+                f"{base}/vendor/{platform_key}/{arch_key}/{binary_name_windows}",
+                f"{base}/vendor/{platform_key}/{binary_name_windows}",
+                f"{base}/vendor/win32/{arch_key}/{binary_name_windows}",
+                f"{base}/vendor/win32/{binary_name_windows}",
+                f"{base}/vendor/win/{arch_key}/{binary_name_windows}",
+                f"{base}/vendor/win/{binary_name_windows}",
+            ]
+        )
+    if platform_key == "linux":
+        candidates.extend(
+            [
+                f"{base}/vendor/linux/{arch_key}/{binary_name}",
+                f"{base}/vendor/linux/{binary_name}",
+            ]
+        )
+    for url in candidates:
+        try:
+            return download_bytes(url)
+        except Exception:
+            continue
+    return None
+
+
+def download_bytes(url: str) -> bytes:
+    request = Request(url, headers={"User-Agent": "imgcompress-fetcher"})
+    with urlopen(request) as response:
+        return response.read()
+
+
+def json_get(url: str) -> dict:
     request = Request(url, headers={"User-Agent": "imgcompress-fetcher"})
     with urlopen(request) as response:
         payload = response.read().decode("utf-8")

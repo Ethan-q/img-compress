@@ -12,6 +12,10 @@ def _vendor_binaries():
     for root, _, files in os.walk(local_dir):
         for name in files:
             path = os.path.join(root, name)
+            if name.startswith("."):
+                continue
+            if os.path.getsize(path) == 0:
+                continue
             rel_path = os.path.relpath(path, os.path.dirname(__file__))
             dest_dir = os.path.dirname(rel_path)
             binaries.append((path, dest_dir))

@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 
 block_cipher = None
 
@@ -59,3 +60,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        exe,
+        name="Imgcompress.app",
+        icon=None,
+        bundle_identifier=None,
+    )
+else:
+    app = exe

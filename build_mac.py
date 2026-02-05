@@ -24,9 +24,9 @@ def main() -> None:
     root_dir = Path(__file__).resolve().parent
     build_py = root_dir / "build.py"
     run_command([sys.executable, str(build_py)], root_dir, dict(os.environ))
-    dist_bin = root_dir / "dist" / "Imgcompress"
-    if not dist_bin.exists():
-        raise SystemExit(f"未找到可执行文件：{dist_bin}")
+    dist_app = root_dir / "dist" / "Imgcompress.app"
+    if not dist_app.exists():
+        raise SystemExit(f"未找到应用包：{dist_app}")
     dmg_path = root_dir / "dist" / "Imgcompress.dmg"
     if dmg_path.exists():
         dmg_path.unlink()
@@ -37,7 +37,7 @@ def main() -> None:
             "-volname",
             "Imgcompress",
             "-srcfolder",
-            str(dist_bin),
+            str(dist_app),
             "-ov",
             "-format",
             "UDZO",

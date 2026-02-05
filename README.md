@@ -42,6 +42,16 @@ python main.py
 - 这些工具通常不是系统自带的，需要你准备对应平台的可执行文件（macOS/Windows 需要分别准备）
 - 工具体积与平台/构建方式有关，一般单个在几百 KB 到数 MB 级别；若要同时内置多平台版本，总体会变大
 
+## vendor 获取
+已提供自动拉取脚本（本地执行一次即可，打包时直接复用 vendor）：
+- 一键拉取当前平台/架构：python fetch_vendor_all.py
+- 多平台预拉取：python fetch_vendor.py --all --platforms=windows,macos --archs=x64,arm64
+
+vendor 目录结构：
+- vendor/<platform>/<arch>/<tool>
+- platform：windows | macos | linux
+- arch：x64 | arm64
+
 ## 目录结构
 - imgcompress/app.py 桌面界面
 - imgcompress/compress.py 压缩逻辑

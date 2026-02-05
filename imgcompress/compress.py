@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -79,7 +81,7 @@ def compress_jpeg(source: Path, output: Path, options: CompressOptions) -> None:
         if cjpeg and run_cjpeg(cjpeg, source, output, quality):
             return
     with Image.open(source) as image:
-        save_kwargs = {
+        save_kwargs: dict[str, object] = {
             "optimize": True,
             "progressive": True,
         }
@@ -195,9 +197,11 @@ def compress_webp(source: Path, output: Path, options: CompressOptions) -> None:
 
 
 def quantize_image(image: Image.Image, colors: int) -> Image.Image:
+    fast_octree = 2
+    median_cut = 0
     if image.mode in {"RGBA", "LA"}:
-        return image.convert("RGBA").quantize(colors=colors, method=Image.FASTOCTREE)
-    return image.convert("RGB").quantize(colors=colors, method=Image.MEDIANCUT)
+        return image.convert("RGBA").quantize(colors=colors, method=fast_octree)
+    return image.convert("RGB").quantize(colors=colors, method=median_cut)
 
 
 def run_jpegtran(jpegtran: str, source: Path, output: Path) -> bool:
@@ -287,7 +291,22 @@ def get_tool_executable(names: list[str]) -> str | None:
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         base_dirs.append(Path(meipass))
-    base_dirs.append(Path(__file__).resolve().parent.parent / "vendor")
+    vendor_root = Path(__file__).resolve().parent.parent / "vendor"
+    platform_key = detect_platform()
+    arch_key = detect_arch()
+    vendor_dirs = [
+        vendor_root / platform_key / arch_key,
+        vendor_root / platform_key,
+        vendor_root,
+    ]
+    if meipass:
+        vendor_dirs = [
+            Path(meipass) / "vendor" / platform_key / arch_key,
+            Path(meipass) / "vendor" / platform_key,
+            Path(meipass) / "vendor",
+            *vendor_dirs,
+        ]
+    base_dirs.extend(vendor_dirs)
     base_dirs.append(Path(sys.executable).resolve().parent)
     for base in base_dirs:
         for name in names:
@@ -300,6 +319,26 @@ def get_tool_executable(names: list[str]) -> str | None:
         if system_path:
             return system_path
     return None
+
+
+def detect_platform() -> str:
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def detect_arch() -> str:
+    if hasattr(os, "uname"):
+        machine = os.uname().machine.lower()
+    else:
+        machine = platform.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        return "arm64"
+    if machine in {"x86_64", "amd64"}:
+        return "x64"
+    return machine
 
 
 def optimize_jpeg(output: Path) -> None:

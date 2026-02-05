@@ -48,7 +48,7 @@ python main.py
 - 多平台预拉取：python fetch_vendor.py --all --platforms=windows,macos --archs=x64,arm64
 脚本默认使用 npm 国内镜像源（registry.npmmirror.com）下载各工具的 npm 包（tgz），再从包内的 vendor/ 目录解压出对应平台的二进制；若包内缺失，会尝试从国内二进制镜像补齐（cdn.npmmirror.com/binaries）。可通过环境变量 NPM_REGISTRY 与 BINARY_MIRROR 覆盖镜像源。
 如果某个平台缺少二进制，可使用 --allow-missing 跳过（程序会回退到 Pillow 或系统 PATH 工具）。
-Windows arm64 若当前版本缺失，会在失败后自动回退到 x64 版本。
+Windows arm64 若当前版本缺失，会在失败后按优先级回退到 x64 版本。
 
 vendor 目录结构：
 - vendor/<platform>/<arch>/<tool>

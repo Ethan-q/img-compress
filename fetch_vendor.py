@@ -78,15 +78,20 @@ def main() -> None:
                 for arch_key in args.archs:
                     target_dir = VENDOR_DIR / platform_key / arch_key
                     target_dir.mkdir(parents=True, exist_ok=True)
-                    payload = fetch_payload_from_sources(
-                        tar,
-                        members,
-                        tool,
-                        version,
-                        platform_key,
-                        arch_key,
-                    )
                     used_fallback_arch = False
+                    payload = None
+                    for candidate_arch in arch_candidates(platform_key, arch_key):
+                        payload = fetch_payload_from_sources(
+                            tar,
+                            members,
+                            tool,
+                            version,
+                            platform_key,
+                            candidate_arch,
+                        )
+                        if payload is not None:
+                            used_fallback_arch = candidate_arch != arch_key
+                            break
                     if payload is None and is_local_target(
                         platform_key, arch_key, current_platform, current_arch
                     ):
@@ -96,16 +101,6 @@ def main() -> None:
                         if copied:
                             print(f"{name} -> {copied}")
                             continue
-                    if payload is None and platform_key == "windows" and arch_key == "arm64":
-                        payload = fetch_payload_from_sources(
-                            tar,
-                            members,
-                            tool,
-                            version,
-                            platform_key,
-                            "x64",
-                        )
-                        used_fallback_arch = payload is not None
                     if payload is None:
                         missing.append(f"{name} ({platform_key}/{arch_key})")
                         if not args.allow_missing:
@@ -192,6 +187,13 @@ def is_local_target(
     platform_key: str, arch_key: str, current_platform: str, current_arch: str
 ) -> bool:
     return platform_key == current_platform and arch_key == current_arch
+
+
+def arch_candidates(platform_key: str, arch_key: str) -> list[str]:
+    candidates = [arch_key]
+    if platform_key == "windows" and arch_key == "arm64":
+        candidates.append("x64")
+    return candidates
 
 
 def detect_platform() -> str:

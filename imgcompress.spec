@@ -5,7 +5,8 @@ block_cipher = None
 
 
 def _vendor_binaries():
-    local_dir = os.path.join(os.path.dirname(__file__), "vendor")
+    base_dir = os.path.dirname(__file__) if "__file__" in globals() else os.getcwd()
+    local_dir = os.path.join(base_dir, "vendor")
     if not os.path.isdir(local_dir):
         return []
     binaries = []
@@ -16,7 +17,7 @@ def _vendor_binaries():
                 continue
             if os.path.getsize(path) == 0:
                 continue
-            rel_path = os.path.relpath(path, os.path.dirname(__file__))
+            rel_path = os.path.relpath(path, base_dir)
             dest_dir = os.path.dirname(rel_path)
             binaries.append((path, dest_dir))
     return binaries

@@ -28,7 +28,11 @@ python main.py
 ## 打包
 已提供 PyInstaller 配置文件 imgcompress.spec，并封装了一键打包脚本：
 - 安装打包工具：pip install pyinstaller
-- 直接运行：python build.py
+- 构建当前平台可执行文件：python build.py
+- macOS 生成 dmg：python build_mac.py
+- Windows 生成 exe：python build_windows.py
+
+Windows 打包必须在 Windows 上运行，macOS 打包必须在 macOS 上运行。
 
 为保证所有用户压缩效果与性能一致，建议把以下工具二进制放到项目根目录的 vendor/ 目录中并随包发布（程序会优先使用 vendor 内的工具，不依赖用户电脑是否安装）：
 - pngquant（PNG 有损）

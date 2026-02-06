@@ -30,6 +30,15 @@ from PySide6.QtWidgets import (
 from .compress import compress_file, get_engine_status
 from .models import CompressOptions, CompressResult, iter_image_files
 
+SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+DEFAULT_FORMATS = {"jpg", "jpeg", "png", "gif", "webp"}
+FORMAT_FILTER = "Images (*.jpg *.jpeg *.png *.gif *.webp)"
+DEFAULT_QUALITY = 85
+PROFILE_PRESETS = {
+    "强压缩": 70,
+    "均衡": 80,
+}
+
 
 class CompressWorker(QObject):
     progress = Signal(int, str, CompressResult)
@@ -42,23 +51,8 @@ class CompressWorker(QObject):
 
     def run(self) -> None:
         results = []
-        total = len(self.files)
-        if total:
-            file_items = [(path, path.stat().st_size) for path in self.files]
-            file_items.sort(key=lambda item: item[1])
-            total_size = sum(size for _, size in file_items)
-            avg_size = total_size / total
-            cpu = os.cpu_count() or 1
-            if avg_size >= 10 * 1024 * 1024:
-                max_workers = min(2, cpu, total)
-            elif avg_size >= 4 * 1024 * 1024:
-                max_workers = min(3, cpu, total)
-            else:
-                max_workers = min(6, cpu, total)
-            files = [path for path, _ in file_items]
-        else:
-            max_workers = 1
-            files = []
+        files, max_workers = self.prepare_files()
+        total = len(files)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
                 executor.submit(compress_file, path, self.options): path for path in files
@@ -72,6 +66,26 @@ class CompressWorker(QObject):
                 percent = int(completed * 100 / total) if total else 100
                 self.progress.emit(percent, path.name, result)
         self.finished.emit(results)
+
+    def prepare_files(self) -> tuple[list[Path], int]:
+        total = len(self.files)
+        if not total:
+            return [], 1
+        file_items = [(path, path.stat().st_size) for path in self.files]
+        file_items.sort(key=lambda item: item[1])
+        total_size = sum(size for _, size in file_items)
+        avg_size = total_size / total
+        max_workers = self.get_max_workers(avg_size, total)
+        files = [path for path, _ in file_items]
+        return files, max_workers
+
+    def get_max_workers(self, avg_size: float, total: int) -> int:
+        cpu = os.cpu_count() or 1
+        if avg_size >= 10 * 1024 * 1024:
+            return min(2, cpu, total)
+        if avg_size >= 4 * 1024 * 1024:
+            return min(3, cpu, total)
+        return min(6, cpu, total)
 
 
 class DropArea(QFrame):
@@ -149,8 +163,8 @@ class MainWindow(QMainWindow):
         self.load_settings()
         self.lossless_checkbox.setChecked(False)
         self.quality_slider.setRange(10, 100)
-        self.quality_slider.setValue(85)
-        self.quality_value.setText("85")
+        self.quality_slider.setValue(DEFAULT_QUALITY)
+        self.quality_value.setText(str(DEFAULT_QUALITY))
         self.quality_slider.setEnabled(True)
         self.profile_combo.addItems(["高质量(推荐)", "均衡", "强压缩"])
         self.format_jpg.setChecked(True)
@@ -216,22 +230,27 @@ class MainWindow(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "选择输入目录")
         if path:
             self.input_line.setText(path)
-            self.selected_files = []
-            self.files_line.setText("")
-            self.output_mode = "mirror"
+            self.set_selected_files(
+                [],
+                output_mode="mirror",
+                clear_input=False,
+                clear_output=False,
+            )
 
     def pick_input_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "选择图片文件",
             "",
-            "Images (*.jpg *.jpeg *.png *.gif *.webp)",
+            FORMAT_FILTER,
         )
         if files:
-            self.selected_files = [Path(file) for file in files]
-            self.files_line.setText(f"已选 {len(self.selected_files)} 个文件")
-            self.input_line.setText("")
-            self.output_mode = "mirror"
+            self.set_selected_files(
+                self.dedupe_paths([Path(file) for file in files]),
+                output_mode="mirror",
+                clear_input=True,
+                clear_output=False,
+            )
 
     def pick_output_dir(self) -> None:
         cached_dir = self.settings.value("output_dir", "")
@@ -252,12 +271,11 @@ class MainWindow(QMainWindow):
 
     def on_profile_changed(self) -> None:
         text = self.profile_combo.currentText()
-        if "强压缩" in text:
-            self.set_quality_value(70)
-        elif "均衡" in text:
-            self.set_quality_value(80)
-        else:
-            self.set_quality_value(85)
+        for label, value in PROFILE_PRESETS.items():
+            if label in text:
+                self.set_quality_value(value)
+                return
+        self.set_quality_value(DEFAULT_QUALITY)
 
     def set_quality_value(self, value: int) -> None:
         self.quality_slider.setValue(value)
@@ -274,7 +292,7 @@ class MainWindow(QMainWindow):
                 self.append_log("请输入有效的输出目录")
                 return
             if not output_dir.exists() or not output_dir.is_dir():
-                output_dir = self.ensure_output_dir(output_dir, None)
+                output_dir = self.ensure_output_dir(output_dir)
             if output_dir is None:
                 self.append_log("请输入有效的输出目录")
                 return
@@ -287,7 +305,7 @@ class MainWindow(QMainWindow):
             return
         input_dir = self.get_input_dir(files)
         if self.output_mode != "same_dir":
-            output_dir = self.ensure_output_dir(output_dir, input_dir)
+            output_dir = self.ensure_output_dir(output_dir)
             if output_dir is None:
                 self.append_log("请输入有效的输出目录")
                 return
@@ -331,10 +349,7 @@ class MainWindow(QMainWindow):
 
     def get_target_files(self, formats: set[str]) -> list[Path]:
         if self.selected_files:
-            patterns = {f".{fmt.lower()}" for fmt in formats}
-            return [
-                path for path in self.selected_files if path.suffix.lower() in patterns
-            ]
+            return self.filter_selected_files(formats)
         input_text = self.input_line.text().strip()
         if not input_text:
             return []
@@ -344,8 +359,11 @@ class MainWindow(QMainWindow):
         return iter_image_files(input_dir, formats)
 
     def get_input_dir(self, files: list[Path]) -> Path:
-        common = os.path.commonpath([str(path) for path in files])
-        common_path = Path(common)
+        try:
+            common = os.path.commonpath([str(path) for path in files])
+            common_path = Path(common)
+        except ValueError:
+            return files[0].parent
         if common_path.exists() and common_path.is_file():
             return common_path.parent
         return common_path
@@ -403,29 +421,22 @@ class MainWindow(QMainWindow):
     def on_drop_paths(self, paths: list[Path]) -> None:
         if self.thread is not None:
             return
-        supported = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-        files: list[Path] = []
-        for path in paths:
-            if path.is_dir():
-                for item in path.rglob("*"):
-                    if item.is_file() and item.suffix.lower() in supported:
-                        files.append(item)
-            elif path.is_file() and path.suffix.lower() in supported:
-                files.append(path)
-        unique_files = list(dict.fromkeys(files))
-        if not unique_files:
+        files = self.collect_files_from_paths(paths)
+        if not files:
             self.append_log("未找到可压缩图片")
             return
         formats = self.get_selected_formats()
         if not formats:
-            formats = {"jpg", "jpeg", "png", "gif", "webp"}
-        self.selected_files = unique_files
-        self.files_line.setText(f"拖拽已选 {len(unique_files)} 个文件")
-        self.input_line.setText("")
-        self.output_line.setText("")
-        self.output_mode = "same_dir"
-        input_dir = self.get_input_dir(unique_files)
-        self.start_compression(unique_files, input_dir, input_dir, formats, "same_dir")
+            formats = DEFAULT_FORMATS
+        self.set_selected_files(
+            files,
+            output_mode="same_dir",
+            clear_input=True,
+            clear_output=True,
+            label="拖拽已选",
+        )
+        input_dir = self.get_input_dir(files)
+        self.start_compression(files, input_dir, input_dir, formats, "same_dir")
 
     def load_settings(self) -> None:
         output_dir = self.settings.value("output_dir", "")
@@ -435,15 +446,49 @@ class MainWindow(QMainWindow):
     def save_output_dir(self, path: str) -> None:
         self.settings.setValue("output_dir", path)
 
-    def ensure_output_dir(
-        self, output_dir: Path | None, input_dir: Path | None
-    ) -> Path | None:
+    def ensure_output_dir(self, output_dir: Path | None) -> Path | None:
         if output_dir is None:
             return None
         if output_dir.exists() and not output_dir.is_dir():
             return None
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+
+    def collect_files_from_paths(self, paths: list[Path]) -> list[Path]:
+        files: list[Path] = []
+        for path in paths:
+            if path.is_dir():
+                for item in path.rglob("*"):
+                    if item.is_file() and item.suffix.lower() in SUPPORTED_SUFFIXES:
+                        files.append(item)
+            elif path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES:
+                files.append(path)
+        return self.dedupe_paths(files)
+
+    def dedupe_paths(self, paths: list[Path]) -> list[Path]:
+        return list(dict.fromkeys(paths))
+
+    def set_selected_files(
+        self,
+        files: list[Path],
+        output_mode: str,
+        clear_input: bool,
+        clear_output: bool,
+        label: str = "已选",
+    ) -> None:
+        self.selected_files = files
+        self.files_line.setText(f"{label} {len(files)} 个文件" if files else "")
+        if clear_input:
+            self.input_line.setText("")
+        if clear_output:
+            self.output_line.setText("")
+        self.output_mode = output_mode
+
+    def filter_selected_files(self, formats: set[str]) -> list[Path]:
+        patterns = {f".{fmt.lower()}" for fmt in formats}
+        return self.dedupe_paths(
+            [path for path in self.selected_files if path.suffix.lower() in patterns]
+        )
 
     def format_engine_status(self, lossless: bool) -> str:
         status = get_engine_status(lossless)

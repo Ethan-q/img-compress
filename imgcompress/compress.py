@@ -30,39 +30,49 @@ def _run_engine_chain(engines: list[tuple[str, Callable[[], bool]]]) -> str | No
 
 
 def compress_files(files: Iterable[Path], options: CompressOptions) -> list[CompressResult]:
-    results = []
-    for source in files:
-        results.append(compress_file(source, options))
-    return results
+    return [compress_file(source, options) for source in files]
 
 
 def compress_file(source: Path, options: CompressOptions) -> CompressResult:
-    registry = get_engine_registry()
-    output = build_output_path(source, options)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    original_size = source.stat().st_size
-    suffix = source.suffix.lower()
-    engine = "未知"
-    engine_runner = registry.get(suffix.lstrip("."))
-    if engine_runner is None:
-        return CompressResult(source, output, original_size, original_size, False, "不支持的格式", "无")
-    engine = engine_runner(source, output, options)
-    if suffix == ".jpg" or suffix == ".jpeg":
-        if engine == "Pillow":
-            optimize_jpeg(output)
+    output = source
+    try:
+        registry = get_engine_registry()
+        output = build_output_path(source, options)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        original_size = source.stat().st_size
+        suffix = source.suffix.lower()
+        engine_runner = registry.get(suffix.lstrip("."))
+        if engine_runner is None:
+            return CompressResult(source, output, original_size, original_size, False, "不支持的格式", "无")
+        engine = engine_runner(source, output, options)
+        _post_optimize(suffix, engine, output, options.lossless)
+        compressed_size = _safe_stat(output, original_size)
+        if output.exists() and compressed_size > original_size:
+            shutil.copy2(source, output)
+            compressed_size = original_size
+        return CompressResult(source, output, original_size, compressed_size, True, "成功", engine)
+    except Exception as exc:
+        original_size = _safe_stat(source, 0)
+        message = str(exc) or "压缩失败"
+        return CompressResult(source, source, original_size, original_size, False, message, "异常")
+
+
+def _safe_stat(path: Path, default: int = 0) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return default
+
+
+def _post_optimize(suffix: str, engine: str, output: Path, lossless: bool) -> None:
+    if engine != "Pillow":
+        return
+    if suffix in {".jpg", ".jpeg"}:
+        optimize_jpeg(output)
     elif suffix == ".png":
-        if engine == "Pillow":
-            optimize_png(output, options.lossless)
+        optimize_png(output, lossless)
     elif suffix == ".gif":
-        if engine == "Pillow":
-            optimize_gif(output)
-    elif suffix == ".webp":
-        pass
-    compressed_size = output.stat().st_size if output.exists() else original_size
-    if output.exists() and compressed_size > original_size:
-        shutil.copy2(source, output)
-        compressed_size = original_size
-    return CompressResult(source, output, original_size, compressed_size, True, "成功", engine)
+        optimize_gif(output)
 
 
 def build_output_path(source: Path, options: CompressOptions) -> Path:
@@ -332,10 +342,6 @@ def get_tool_executable(names: list[str]) -> str | None:
     if cached is not None or key in _TOOL_CACHE:
         return cached
     base_dirs = _get_tool_search_dirs()
-    meipass = getattr(sys, "_MEIPASS", None)
-    vendor_root = Path(__file__).resolve().parent.parent / "vendor"
-    platform_key = detect_platform()
-    arch_key = detect_arch()
     for base in base_dirs:
         for name in names:
             candidates = [base / name, base / f"{name}.exe"]

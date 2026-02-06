@@ -7,6 +7,7 @@
 #include <QPair>
 #include <QProcess>
 #include <QSysInfo>
+#include <QTemporaryFile>
 
 namespace {
 QString normalizeProfile(const QString &profile) {
@@ -175,7 +176,7 @@ CompressionResult missingEngine(const QString &source, const QString &engine) {
 }
 
 QStringList EngineRegistry::availableEngines() {
-    return {"jpegtran", "mozjpeg", "pngquant", "oxipng", "optipng", "gifsicle", "cwebp"};
+    return {"jpegtran", "mozjpeg", "pngquant", "oxipng", "optipng", "gifsicle", "cwebp", "dwebp"};
 }
 
 QString EngineRegistry::engineStatus(bool lossless) {
@@ -186,12 +187,14 @@ QString EngineRegistry::engineStatus(bool lossless) {
     const QString optipng = findTool({"optipng"});
     const QString gifsicle = findTool({"gifsicle"});
     const QString cwebp = findTool({"cwebp"});
+    const QString dwebp = findTool({"dwebp"});
     const QString jpgLossless = jpegtran.isEmpty() ? "不可用" : "jpegtran";
     const QString jpgLossy = cjpeg.isEmpty() ? "不可用" : "mozjpeg";
     const QString pngLossless = !oxipng.isEmpty() ? "oxipng" : (!optipng.isEmpty() ? "optipng" : "不可用");
     const QString pngLossy = pngquant.isEmpty() ? "不可用" : "pngquant";
     const QString gifEngine = gifsicle.isEmpty() ? "不可用" : "gifsicle";
-    const QString webpEngine = cwebp.isEmpty() ? "不可用" : "cwebp";
+    const QString webpEncode = cwebp.isEmpty() ? "不可用" : "cwebp";
+    const QString webpDecode = dwebp.isEmpty() ? "不可用" : "dwebp";
     const QString mode = lossless ? "无损优先" : "有损优先";
     const QString appDir = QCoreApplication::applicationDirPath();
     const QString platformKey = detectPlatform();
@@ -199,9 +202,10 @@ QString EngineRegistry::engineStatus(bool lossless) {
     const QString productType = QSysInfo::productType();
     const QString resourceVendor = QDir(appDir).filePath(QString("../Resources/vendor/%1/%2").arg(platformKey, archKey));
     const bool anyFound = !jpegtran.isEmpty() || !cjpeg.isEmpty() || !pngquant.isEmpty()
-        || !oxipng.isEmpty() || !optipng.isEmpty() || !gifsicle.isEmpty() || !cwebp.isEmpty();
-    QString status = QString("引擎状态(%1)：JPG 无损(%2) 有损(%3)；PNG 无损(%4) 有损(%5)；GIF(%6)；WebP(%7)")
-        .arg(mode, jpgLossless, jpgLossy, pngLossless, pngLossy, gifEngine, webpEngine);
+        || !oxipng.isEmpty() || !optipng.isEmpty() || !gifsicle.isEmpty() || !cwebp.isEmpty()
+        || !dwebp.isEmpty();
+    QString status = QString("引擎状态(%1)：JPG 无损(%2) 有损(%3)；PNG 无损(%4) 有损(%5)；GIF(%6)；WebP 编码(%7) 解码(%8)")
+        .arg(mode, jpgLossless, jpgLossy, pngLossless, pngLossy, gifEngine, webpEncode, webpDecode);
     status += QString(" | 平台 %1/%2(%3)").arg(platformKey, archKey, productType);
     status += QString(" | vendor(Resources) %1").arg(QDir(resourceVendor).exists() ? "存在" : "缺失");
     if (!anyFound) {
@@ -217,6 +221,67 @@ CompressionResult EngineRegistry::compressFile(
 ) {
     const QString suffix = QFileInfo(source).suffix().toLower();
     const qint64 originalSize = QFileInfo(source).size();
+    const QString outputFormat = options.outputFormat.toLower();
+    if (outputFormat == "gif" && suffix != "gif") {
+        return {false, originalSize, originalSize, "gifsicle", "不支持转换为GIF"};
+    }
+    if (outputFormat == "webp" && suffix != "webp") {
+        const QString cwebp = findTool({"cwebp"});
+        if (cwebp.isEmpty()) {
+            return missingEngine(source, "cwebp");
+        }
+        QStringList args;
+        if (options.lossless) {
+            args = {"-lossless", "-z", "9", "-m", "5", "-metadata", "none", source, "-o", output};
+        } else {
+            const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
+            args = {"-q", QString::number(quality), "-m", "5", "-metadata", "none", source, "-o", output};
+        }
+        const bool ok = runProcess(cwebp, args);
+        const qint64 outputSize = QFileInfo(output).size();
+        return {ok, originalSize, outputSize, "cwebp", ok ? "成功" : "失败"};
+    }
+    if (suffix == "webp" && (outputFormat == "jpg" || outputFormat == "jpeg" || outputFormat == "png")) {
+        const QString dwebp = findTool({"dwebp"});
+        if (dwebp.isEmpty()) {
+            return missingEngine(source, "dwebp");
+        }
+        if (outputFormat == "png") {
+            const QStringList args = {"-quiet", "-png", source, "-o", output};
+            const bool ok = runProcess(dwebp, args);
+            const qint64 outputSize = QFileInfo(output).size();
+            return {ok, originalSize, outputSize, "dwebp", ok ? "成功" : "失败"};
+        }
+        const QString cjpeg = findTool({"cjpeg", "mozjpeg"});
+        if (cjpeg.isEmpty()) {
+            return missingEngine(source, "mozjpeg");
+        }
+        QTemporaryFile temp(QDir(QFileInfo(output).absolutePath()).filePath(".imgcompress_tmp_XXXXXX.ppm"));
+        temp.setAutoRemove(true);
+        if (!temp.open()) {
+            return {false, originalSize, originalSize, "dwebp", "无法创建临时文件"};
+        }
+        const QString tempPath = temp.fileName();
+        temp.close();
+        const QStringList decodeArgs = {"-quiet", "-ppm", source, "-o", tempPath};
+        const bool decoded = runProcess(dwebp, decodeArgs);
+        if (!decoded) {
+            return {false, originalSize, originalSize, "dwebp", "解码失败"};
+        }
+        const int quality = options.lossless ? 100 : qBound(1, adjustQuality(options.quality, options.profile), 100);
+        const QStringList encodeArgs = {
+            "-quality",
+            QString::number(quality),
+            "-progressive",
+            "-optimize",
+            "-outfile",
+            output,
+            tempPath
+        };
+        const bool ok = runProcess(cjpeg, encodeArgs);
+        const qint64 outputSize = QFileInfo(output).size();
+        return {ok, originalSize, outputSize, "dwebp+mozjpeg", ok ? "成功" : "失败"};
+    }
     if (suffix == "jpg" || suffix == "jpeg") {
         if (options.lossless) {
             const QString jpegtran = findTool({"jpegtran"});

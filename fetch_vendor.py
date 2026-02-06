@@ -25,33 +25,46 @@ ARCHS = ["x64", "arm64"]
 TOOLS = {
     "pngquant": {
         "binary_names": ["pngquant"],
-        "npm_package": "pngquant-bin",
-        "mirror_name": "pngquant-bin",
+        "sources": [
+            {"npm_package": "pngquant-bin", "mirror_name": "pngquant-bin"},
+        ],
     },
     "optipng": {
         "binary_names": ["optipng"],
-        "npm_package": "optipng-bin",
-        "mirror_name": "optipng-bin",
+        "sources": [
+            {"npm_package": "optipng-bin", "mirror_name": "optipng-bin"},
+        ],
     },
     "cjpeg": {
         "binary_names": ["cjpeg"],
-        "npm_package": "mozjpeg",
-        "mirror_name": "mozjpeg-bin",
+        "sources": [
+            {"npm_package": "mozjpeg", "mirror_name": "mozjpeg-bin"},
+        ],
     },
     "jpegtran": {
         "binary_names": ["jpegtran"],
-        "npm_package": "jpegtran-bin",
-        "mirror_name": "jpegtran-bin",
+        "sources": [
+            {"npm_package": "jpegtran-bin", "mirror_name": "jpegtran-bin"},
+        ],
     },
     "gifsicle": {
         "binary_names": ["gifsicle"],
-        "npm_package": "gifsicle",
-        "mirror_name": "gifsicle-bin",
+        "sources": [
+            {"npm_package": "gifsicle", "mirror_name": "gifsicle-bin"},
+        ],
     },
     "cwebp": {
         "binary_names": ["cwebp"],
-        "npm_package": "cwebp-bin",
-        "mirror_name": "cwebp-bin",
+        "sources": [
+            {"npm_package": "cwebp-bin", "mirror_name": "cwebp-bin"},
+        ],
+    },
+    "dwebp": {
+        "binary_names": ["dwebp"],
+        "sources": [
+            {"npm_package": "cwebp-bin", "mirror_name": "cwebp-bin"},
+            {"npm_package": "cwebp", "mirror_name": "webp"},
+        ],
     },
 }
 
@@ -64,60 +77,78 @@ def main() -> None:
     missing: list[str] = []
     for name in args.tools:
         tool = TOOLS[name]
-        package = cast(str, tool["npm_package"])
-        tarball_url, package_version = resolve_npm_tarball(package)
-        tar_bytes = download_bytes(tarball_url)
-        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
-            version = read_package_version(tar) or package_version
-            members = [
-                m
-                for m in tar.getmembers()
-                if (m.isfile() or m.issym()) and "/vendor/" in m.name
-            ]
-            for platform_key in args.platforms:
-                for arch_key in args.archs:
-                    target_dir = VENDOR_DIR / platform_key / arch_key
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    used_fallback_arch = False
-                    payload = None
-                    for candidate_arch in arch_candidates(platform_key, arch_key):
-                        payload = fetch_payload_from_sources(
-                            tar,
-                            members,
-                            tool,
-                            version,
-                            platform_key,
-                            candidate_arch,
-                        )
+        sources = []
+        for source in cast(list[dict[str, str]], tool["sources"]):
+            package = source["npm_package"]
+            tarball_url, package_version = resolve_npm_tarball(package)
+            tar_bytes = download_bytes(tarball_url)
+            with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
+                version = read_package_version(tar) or package_version
+            sources.append(
+                {
+                    "tar_bytes": tar_bytes,
+                    "version": version,
+                    "mirror_name": source.get("mirror_name", ""),
+                }
+            )
+        for platform_key in args.platforms:
+            for arch_key in args.archs:
+                target_dir = VENDOR_DIR / platform_key / arch_key
+                target_dir.mkdir(parents=True, exist_ok=True)
+                used_fallback_arch = False
+                payload = None
+                for candidate_arch in arch_candidates(platform_key, arch_key):
+                    for source in sources:
+                        with tarfile.open(
+                            fileobj=io.BytesIO(source["tar_bytes"]), mode="r:gz"
+                        ) as tar:
+                            members = [
+                                m
+                                for m in tar.getmembers()
+                                if (m.isfile() or m.issym()) and "/vendor/" in m.name
+                            ]
+                            payload = fetch_payload_from_sources(
+                                tar,
+                                members,
+                                {
+                                    "binary_names": tool["binary_names"],
+                                    "mirror_name": source["mirror_name"],
+                                },
+                                source["version"],
+                                platform_key,
+                                candidate_arch,
+                            )
                         if payload is not None:
                             used_fallback_arch = candidate_arch != arch_key
                             break
-                    if payload is None and is_local_target(
-                        platform_key, arch_key, current_platform, current_arch
-                    ):
-                        copied = copy_from_system(
-                            cast(list[str], tool["binary_names"]), target_dir, platform_key
-                        )
-                        if copied:
-                            print(f"{name} -> {copied}")
-                            continue
-                    if payload is None:
-                        missing.append(f"{name} ({platform_key}/{arch_key})")
-                        if not args.allow_missing:
-                            raise RuntimeError(
-                                f"未找到可用二进制：{name} ({platform_key}/{arch_key})"
-                            )
-                        print(f"{name} 缺失，已跳过：{platform_key}/{arch_key}")
-                        continue
-                    target = target_dir / output_name(
-                        cast(list[str], tool["binary_names"])[0], platform_key
+                    if payload is not None:
+                        break
+                if payload is None and is_local_target(
+                    platform_key, arch_key, current_platform, current_arch
+                ):
+                    copied = copy_from_system(
+                        cast(list[str], tool["binary_names"]), target_dir, platform_key
                     )
-                    write_bytes(target, payload)
-                    ensure_executable(target, platform_key)
-                    if used_fallback_arch:
-                        print(f"{name} -> {target}（x64 回退）")
-                    else:
-                        print(f"{name} -> {target}")
+                    if copied:
+                        print(f"{name} -> {copied}")
+                        continue
+                if payload is None:
+                    missing.append(f"{name} ({platform_key}/{arch_key})")
+                    if not args.allow_missing:
+                        raise RuntimeError(
+                            f"未找到可用二进制：{name} ({platform_key}/{arch_key})"
+                        )
+                    print(f"{name} 缺失，已跳过：{platform_key}/{arch_key}")
+                    continue
+                target = target_dir / output_name(
+                    cast(list[str], tool["binary_names"])[0], platform_key
+                )
+                write_bytes(target, payload)
+                ensure_executable(target, platform_key)
+                if used_fallback_arch:
+                    print(f"{name} -> {target}（x64 回退）")
+                else:
+                    print(f"{name} -> {target}")
     if missing and not args.allow_missing:
         missing_text = "，".join(missing)
         raise RuntimeError(f"未找到可用二进制：{missing_text}")

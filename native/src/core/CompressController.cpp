@@ -16,7 +16,8 @@ void CompressController::start(
     const QString &outputFormat,
     bool resizeEnabled,
     int targetWidth,
-    int targetHeight
+    int targetHeight,
+    int resizeMode
 ) {
     if (running) {
         emit logMessage("已有任务进行中");
@@ -43,7 +44,7 @@ void CompressController::start(
             return;
         }
     }
-    CompressionOptions options{lossless, quality, profile, outputFormat, resizeEnabled, targetWidth, targetHeight};
+    CompressionOptions options{lossless, quality, profile, outputFormat, resizeEnabled, targetWidth, targetHeight, resizeMode};
     thread = new QThread(this);
     worker = new CompressWorker();
     worker->configure(inputText, outputText, formats, options);
@@ -79,7 +80,8 @@ void CompressController::startFiles(
     const QString &outputFormat,
     bool resizeEnabled,
     int targetWidth,
-    int targetHeight
+    int targetHeight,
+    int resizeMode
 ) {
     if (running) {
         emit logMessage("已有任务进行中");
@@ -117,7 +119,7 @@ void CompressController::startFiles(
             return;
         }
     }
-    CompressionOptions options{lossless, quality, profile, outputFormat, resizeEnabled, targetWidth, targetHeight};
+    CompressionOptions options{lossless, quality, profile, outputFormat, resizeEnabled, targetWidth, targetHeight, resizeMode};
     thread = new QThread(this);
     worker = new CompressWorker();
     worker->configureFiles(validFiles, baseText, outputText, formats, options);

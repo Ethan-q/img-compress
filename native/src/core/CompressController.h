@@ -24,7 +24,8 @@ public:
         const QString &outputFormat,
         bool resizeEnabled,
         int targetWidth,
-        int targetHeight
+        int targetHeight,
+        int resizeMode
     );
     void startFiles(
         const QStringList &files,
@@ -37,7 +38,8 @@ public:
         const QString &outputFormat,
         bool resizeEnabled,
         int targetWidth,
-        int targetHeight
+        int targetHeight,
+        int resizeMode
     );
 
 signals:

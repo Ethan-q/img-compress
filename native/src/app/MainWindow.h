@@ -83,7 +83,7 @@ private:
     QCheckBox *losslessCheck;
     QComboBox *profileCombo;
     QComboBox *outputFormatCombo;
-    QCheckBox *resizeCheck;
+    QComboBox *resizeModeCombo;
     QLineEdit *widthInput;
     QLineEdit *heightInput;
     QIntValidator *sizeValidator;

@@ -12,6 +12,7 @@ struct CompressionOptions {
     bool resizeEnabled;
     int targetWidth;
     int targetHeight;
+    int resizeMode;
 };
 
 struct CompressionResult {

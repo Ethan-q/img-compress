@@ -403,7 +403,11 @@ void MainWindow::setupUi() {
     optionsLayout->addRow("输出格式", outputFormatCombo);
 
     auto *resizeLayout = new QHBoxLayout();
-    resizeCheck = new QCheckBox("固定尺寸", this);
+    resizeModeCombo = new QComboBox(this);
+    resizeModeCombo->addItem("原尺寸", 0);
+    resizeModeCombo->addItem("宽高等比", 1);
+    resizeModeCombo->addItem("强制裁剪", 2);
+    resizeModeCombo->setCurrentIndex(0);
     widthInput = new QLineEdit(this);
     heightInput = new QLineEdit(this);
     sizeValidator = new QIntValidator(16, 8192, this);
@@ -417,19 +421,18 @@ void MainWindow::setupUi() {
     heightInput->setText("1080");
     widthInput->setEnabled(false);
     heightInput->setEnabled(false);
-    connect(resizeCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        widthInput->setEnabled(checked);
-        heightInput->setEnabled(checked);
+    connect(resizeModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
+        updateCompressionOptionsState();
     });
     auto *sizeLabel = new QLabel("×", this);
     sizeLabel->setAlignment(Qt::AlignCenter);
     sizeLabel->setFixedWidth(12);
-    resizeLayout->addWidget(resizeCheck);
+    resizeLayout->addWidget(resizeModeCombo);
     resizeLayout->addWidget(widthInput);
     resizeLayout->addWidget(sizeLabel);
     resizeLayout->addWidget(heightInput);
     resizeLayout->addStretch();
-    optionsLayout->addRow("输出尺寸(等比)", resizeLayout);
+    optionsLayout->addRow("输出尺寸", resizeLayout);
     optionsGroupLayout->addLayout(optionsLayout);
 
     progressBar = new QProgressBar(this);
@@ -756,7 +759,8 @@ bool MainWindow::startDirCompression(
         return false;
     }
     const QString outputFormat = selectedOutputFormat();
-    const bool resizeEnabled = resizeCheck->isChecked();
+    const int resizeMode = resizeModeCombo->currentData().toInt();
+    const bool resizeEnabled = resizeMode != 0;
     int targetWidth = 0;
     int targetHeight = 0;
     if (resizeEnabled && !readResizeSize(targetWidth, targetHeight)) {
@@ -772,7 +776,8 @@ bool MainWindow::startDirCompression(
         outputFormat,
         resizeEnabled,
         targetWidth,
-        targetHeight
+        targetHeight,
+        resizeMode
     );
     return true;
 }
@@ -801,7 +806,8 @@ bool MainWindow::startFilesCompression(
         return false;
     }
     const QString outputFormat = selectedOutputFormat();
-    const bool resizeEnabled = resizeCheck->isChecked();
+    const int resizeMode = resizeModeCombo->currentData().toInt();
+    const bool resizeEnabled = resizeMode != 0;
     int targetWidth = 0;
     int targetHeight = 0;
     if (resizeEnabled && !readResizeSize(targetWidth, targetHeight)) {
@@ -818,7 +824,8 @@ bool MainWindow::startFilesCompression(
         outputFormat,
         resizeEnabled,
         targetWidth,
-        targetHeight
+        targetHeight,
+        resizeMode
     );
     return true;
 }
@@ -833,14 +840,16 @@ void MainWindow::updateCompressionOptionsState() {
     qualitySlider->setEnabled(!lossless);
     qualityValue->setEnabled(!lossless);
     outputFormatCombo->setEnabled(!lossless);
-    resizeCheck->setEnabled(!lossless);
     if (lossless) {
         widthInput->setEnabled(false);
         heightInput->setEnabled(false);
+        resizeModeCombo->setEnabled(false);
     } else {
-        const bool resizeEnabled = resizeCheck->isChecked();
+        const int resizeMode = resizeModeCombo->currentData().toInt();
+        const bool resizeEnabled = resizeMode != 0;
         widthInput->setEnabled(resizeEnabled);
         heightInput->setEnabled(resizeEnabled);
+        resizeModeCombo->setEnabled(true);
     }
 }
 

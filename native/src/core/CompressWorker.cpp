@@ -133,25 +133,64 @@ void CompressWorker::run() {
         }
         const qint64 sourceSize = sourceInfo.size();
         CompressionResult result{false, sourceSize, sourceSize, "无", "失败"};
-        if (options.resizeEnabled || targetFormat != sourceSuffix) {
+        const bool convertToWebp = targetFormat == "webp" && sourceSuffix != "webp";
+        const bool convertToGif = targetFormat == "gif" && sourceSuffix != "gif";
+        const bool convertFromWebp = sourceSuffix == "webp"
+            && (targetFormat == "jpg" || targetFormat == "jpeg" || targetFormat == "png");
+        if (convertToGif) {
+            emit logMessage(QString("%1 转换失败：不支持转换为GIF").arg(sourceInfo.fileName()));
+            completed += 1;
+            emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
+            continue;
+        }
+        if ((convertToWebp || convertFromWebp) && !options.resizeEnabled) {
+            result = EngineRegistry::compressFile(file, outputPath, options);
+        } else if (options.resizeEnabled || targetFormat != sourceSuffix) {
             QImageReader reader(file);
             reader.setAutoTransform(true);
+            if (sourceSuffix == "webp") {
+                reader.setFormat("webp");
+            }
             QImage image = reader.read();
             if (image.isNull()) {
-                emit logMessage(QString("%1 转换失败：无法读取图片").arg(sourceInfo.fileName()));
+                if (sourceSuffix == "webp") {
+                    emit logMessage(QString("%1 转换失败：WebP 解码不可用").arg(sourceInfo.fileName()));
+                } else {
+                    emit logMessage(QString("%1 转换失败：无法读取图片").arg(sourceInfo.fileName()));
+                }
                 completed += 1;
                 emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
                 continue;
             }
             if (options.resizeEnabled) {
-                image = image.scaled(
-                    options.targetWidth,
-                    options.targetHeight,
-                    Qt::KeepAspectRatio,
-                    Qt::SmoothTransformation
-                );
+                if (options.resizeMode == 2) {
+                    image = image.scaled(
+                        options.targetWidth,
+                        options.targetHeight,
+                        Qt::KeepAspectRatioByExpanding,
+                        Qt::SmoothTransformation
+                    );
+                    const int cropWidth = qMin(options.targetWidth, image.width());
+                    const int cropHeight = qMin(options.targetHeight, image.height());
+                    const int offsetX = qMax(0, (image.width() - cropWidth) / 2);
+                    const int offsetY = qMax(0, (image.height() - cropHeight) / 2);
+                    image = image.copy(QRect(offsetX, offsetY, cropWidth, cropHeight));
+                } else if (options.resizeMode == 1) {
+                    image = image.scaled(
+                        options.targetWidth,
+                        options.targetHeight,
+                        Qt::KeepAspectRatio,
+                        Qt::SmoothTransformation
+                    );
+                }
             }
-            QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + targetFormat));
+            QString tempFormat = targetFormat;
+            bool allowTempFallback = true;
+            if (convertToWebp || convertToGif) {
+                tempFormat = sourceSuffix.isEmpty() ? "png" : sourceSuffix;
+                allowTempFallback = false;
+            }
+            QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
             temp.setAutoRemove(true);
             if (!temp.open()) {
                 emit logMessage(QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName()));
@@ -161,7 +200,7 @@ void CompressWorker::run() {
             }
             const QString tempPath = temp.fileName();
             temp.close();
-            QImageWriter writer(tempPath, targetFormat.toLatin1());
+            QImageWriter writer(tempPath, tempFormat.toLatin1());
             const int quality = options.lossless
                 ? 100
                 : qBound(1, adjustQuality(options.quality, options.profile), 100);
@@ -173,7 +212,7 @@ void CompressWorker::run() {
                 continue;
             }
             result = EngineRegistry::compressFile(tempPath, outputPath, options);
-            if (!result.success) {
+            if (!result.success && allowTempFallback) {
                 QFile::remove(outputPath);
                 QFile::copy(tempPath, outputPath);
                 result = {true, sourceSize, QFileInfo(outputPath).size(), "Qt", "已转换"};

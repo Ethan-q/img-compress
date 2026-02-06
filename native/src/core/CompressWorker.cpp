@@ -35,10 +35,10 @@ QString ensureUniquePath(const QString &candidate, const QString &sourcePath, co
 
 int adjustQuality(int quality, const QString &profile) {
     if (profile.contains("强")) {
-        return qMax(9, quality - 12);
+        return qMax(8, quality - 18);
     }
     if (profile.contains("均衡")) {
-        return qMax(10, quality - 7);
+        return qMax(10, quality - 10);
     }
     return quality;
 }

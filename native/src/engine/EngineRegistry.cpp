@@ -25,36 +25,36 @@ QString normalizeProfile(const QString &profile) {
 int adjustQuality(int quality, const QString &profile) {
     const QString normalized = normalizeProfile(profile);
     if (normalized == "strong") {
-        return qMax(9, quality - 12);
+        return qMax(8, quality - 18);
     }
     if (normalized == "balanced") {
-        return qMax(10, quality - 7);
+        return qMax(10, quality - 10);
     }
     return quality;
 }
 
 QPair<int, int> getPngquantSettings(const QString &profile, int quality) {
     const QString normalized = normalizeProfile(profile);
-    int rangeSize = 12;
-    int speed = 1;
+    int rangeSize = 14;
+    int speed = 3;
     if (normalized == "strong") {
-        rangeSize = 28;
-        speed = 3;
+        rangeSize = 34;
+        speed = 5;
     } else if (normalized == "balanced") {
-        rangeSize = 20;
-        speed = 3;
+        rangeSize = 24;
+        speed = 4;
     }
-    const int minQ = qMax(25, quality - rangeSize);
+    const int minQ = qMax(20, quality - rangeSize);
     return qMakePair(minQ, speed);
 }
 
 int adjustLossy(const QString &profile, int lossy) {
     const QString normalized = normalizeProfile(profile);
     if (normalized == "strong") {
-        return qMin(200, static_cast<int>(lossy * 1.45));
+        return qMin(200, static_cast<int>(lossy * 1.6));
     }
     if (normalized == "balanced") {
-        return qMin(200, static_cast<int>(lossy * 1.25));
+        return qMin(200, static_cast<int>(lossy * 1.35));
     }
     return lossy;
 }
@@ -62,10 +62,10 @@ int adjustLossy(const QString &profile, int lossy) {
 int adjustColors(const QString &profile, int colors) {
     const QString normalized = normalizeProfile(profile);
     if (normalized == "strong") {
-        return qMax(32, static_cast<int>(colors * 0.65));
+        return qMax(32, static_cast<int>(colors * 0.6));
     }
     if (normalized == "balanced") {
-        return qMax(32, static_cast<int>(colors * 0.8));
+        return qMax(32, static_cast<int>(colors * 0.75));
     }
     return colors;
 }
@@ -286,10 +286,10 @@ CompressionResult EngineRegistry::compressFile(
         QStringList args;
         const QString normalized = normalizeProfile(options.profile);
         if (optimizer.contains("oxipng")) {
-            const QString level = normalized == "strong" ? "7" : (normalized == "balanced" ? "6" : "5");
+            const QString level = normalized == "strong" ? "6" : (normalized == "balanced" ? "5" : "4");
             args = {"-o", level, "--strip", "all", "-out", output, source};
         } else {
-            const QString level = normalized == "strong" ? "7" : (normalized == "balanced" ? "7" : "6");
+            const QString level = normalized == "strong" ? "6" : (normalized == "balanced" ? "6" : "5");
             args = {QString("-o%1").arg(level), "-strip", "all", "-out", output, source};
         }
         const bool ok = runProcess(optimizer, args);
@@ -322,10 +322,10 @@ CompressionResult EngineRegistry::compressFile(
         }
         QStringList args;
         if (options.lossless) {
-            args = {"-lossless", "-z", "9", "-m", "6", "-metadata", "none", source, "-o", output};
+            args = {"-lossless", "-z", "9", "-m", "5", "-metadata", "none", source, "-o", output};
         } else {
             const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
-            args = {"-q", QString::number(quality), "-m", "6", "-metadata", "none", source, "-o", output};
+            args = {"-q", QString::number(quality), "-m", "5", "-metadata", "none", source, "-o", output};
         }
         const bool ok = runProcess(cwebp, args);
         const qint64 outputSize = QFileInfo(output).size();

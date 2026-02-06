@@ -356,6 +356,7 @@ void MainWindow::setupUi() {
     losslessCheck = new QCheckBox("无损压缩", this);
     profileCombo = new QComboBox(this);
     profileCombo->addItems({"高质量(推荐)", "均衡", "强压缩"});
+    profileCombo->setCurrentIndex(2);
     profileCombo->setMaxVisibleItems(8);
     profileCombo->setView(new QListView(profileCombo));
     profileCombo->view()->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);

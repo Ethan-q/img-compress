@@ -1,46 +1,78 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import platform
 import shutil
 import subprocess
 import sys
-from typing import Iterable
+from threading import Lock
+from typing import Callable, Iterable
 
 from PIL import Image, ImageSequence
 
 from .models import CompressOptions, CompressResult
 
+WINDOWS_CREATIONFLAGS = (
+    getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform.startswith("win") else 0
+)
+_TOOL_CACHE: dict[tuple[str, ...], str | None] = {}
+_TOOL_DIRS: list[Path] | None = None
+_ENGINE_STATUS_CACHE: dict[bool, dict[str, str]] = {}
+_ENGINE_REGISTRY: dict[str, Callable[[Path, Path, CompressOptions], str]] = {}
+_TOOL_LOCK = Lock()
+
+def _run_engine_chain(engines: list[tuple[str, Callable[[], bool]]]) -> str | None:
+    for name, runner in engines:
+        if runner():
+            return name
+    return None
+
 
 def compress_files(files: Iterable[Path], options: CompressOptions) -> list[CompressResult]:
-    results = []
-    for source in files:
-        results.append(compress_file(source, options))
-    return results
+    return [compress_file(source, options) for source in files]
 
 
 def compress_file(source: Path, options: CompressOptions) -> CompressResult:
-    output = build_output_path(source, options)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    original_size = source.stat().st_size
-    suffix = source.suffix.lower()
-    if suffix == ".jpg" or suffix == ".jpeg":
-        compress_jpeg(source, output, options)
+    output = source
+    try:
+        registry = get_engine_registry()
+        output = build_output_path(source, options)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        original_size = source.stat().st_size
+        suffix = source.suffix.lower()
+        engine_runner = registry.get(suffix.lstrip("."))
+        if engine_runner is None:
+            return CompressResult(source, output, original_size, original_size, False, "不支持的格式", "无")
+        engine = engine_runner(source, output, options)
+        _post_optimize(suffix, engine, output, options.lossless)
+        compressed_size = _safe_stat(output, original_size)
+        if output.exists() and compressed_size > original_size:
+            shutil.copy2(source, output)
+            compressed_size = original_size
+        return CompressResult(source, output, original_size, compressed_size, True, "成功", engine)
+    except Exception as exc:
+        original_size = _safe_stat(source, 0)
+        message = str(exc) or "压缩失败"
+        return CompressResult(source, source, original_size, original_size, False, message, "异常")
+
+
+def _safe_stat(path: Path, default: int = 0) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return default
+
+
+def _post_optimize(suffix: str, engine: str, output: Path, lossless: bool) -> None:
+    if engine != "Pillow":
+        return
+    if suffix in {".jpg", ".jpeg"}:
         optimize_jpeg(output)
     elif suffix == ".png":
-        compress_png(source, output, options)
-        optimize_png(output, options.lossless)
+        optimize_png(output, lossless)
     elif suffix == ".gif":
-        compress_gif(source, output, options)
         optimize_gif(output)
-    elif suffix == ".webp":
-        compress_webp(source, output, options)
-    else:
-        return CompressResult(source, output, original_size, original_size, False, "不支持的格式")
-    compressed_size = output.stat().st_size if output.exists() else original_size
-    if output.exists() and compressed_size > original_size:
-        shutil.copy2(source, output)
-        compressed_size = original_size
-    return CompressResult(source, output, original_size, compressed_size, True, "成功")
 
 
 def build_output_path(source: Path, options: CompressOptions) -> Path:
@@ -68,18 +100,22 @@ def ensure_unique_path(path: Path, source_stem: str, source_suffix: str) -> Path
         index += 1
 
 
-def compress_jpeg(source: Path, output: Path, options: CompressOptions) -> None:
+def compress_jpeg(source: Path, output: Path, options: CompressOptions) -> str:
+    engines: list[tuple[str, Callable[[], bool]]] = []
     if options.lossless:
         jpegtran = get_tool_executable(["jpegtran"])
-        if jpegtran and run_jpegtran(jpegtran, source, output):
-            return
+        if jpegtran:
+            engines.append(("jpegtran", lambda: run_jpegtran(jpegtran, source, output)))
     else:
         cjpeg = get_tool_executable(["cjpeg", "mozjpeg"])
         quality = adjust_quality(options.quality, options.quality_profile)
-        if cjpeg and run_cjpeg(cjpeg, source, output, quality):
-            return
+        if cjpeg:
+            engines.append(("mozjpeg", lambda: run_cjpeg(cjpeg, source, output, quality)))
+    engine = _run_engine_chain(engines)
+    if engine:
+        return engine
     with Image.open(source) as image:
-        save_kwargs = {
+        save_kwargs: dict[str, object] = {
             "optimize": True,
             "progressive": True,
         }
@@ -89,20 +125,21 @@ def compress_jpeg(source: Path, output: Path, options: CompressOptions) -> None:
         else:
             save_kwargs["quality"] = max(1, min(100, adjust_quality(options.quality, options.quality_profile)))
         image.save(output, format="JPEG", **save_kwargs)
+    return "Pillow"
 
 
-def compress_png(source: Path, output: Path, options: CompressOptions) -> None:
+def compress_png(source: Path, output: Path, options: CompressOptions) -> str:
+    engines: list[tuple[str, Callable[[], bool]]] = []
     if options.lossless:
-        optimized = optimize_png_source(source, output)
-        if optimized:
-            return
+        engines.append(("oxipng", lambda: optimize_png_source(source, output)))
     pngquant = get_tool_executable(["pngquant"])
     if not options.lossless and pngquant:
         quality = max(10, min(100, adjust_quality(options.quality, options.quality_profile)))
         min_q, speed = get_pngquant_settings(options.quality_profile, quality)
-        result = run_pngquant(pngquant, source, output, min_q, quality, speed)
-        if result:
-            return
+        engines.append(("pngquant", lambda: run_pngquant(pngquant, source, output, min_q, quality, speed)))
+    engine = _run_engine_chain(engines)
+    if engine:
+        return engine
     with Image.open(source) as image:
         if options.lossless:
             image.save(output, format="PNG", optimize=True, compress_level=9)
@@ -112,6 +149,7 @@ def compress_png(source: Path, output: Path, options: CompressOptions) -> None:
             colors = adjust_colors(options.quality_profile, colors)
             quantized = quantize_image(image, colors)
             quantized.save(output, format="PNG", optimize=True, compress_level=9)
+    return "Pillow"
 
 
 def run_pngquant(
@@ -135,21 +173,29 @@ def run_pngquant(
         "--force",
         str(source),
     ]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
-def compress_gif(source: Path, output: Path, options: CompressOptions) -> None:
+def compress_gif(source: Path, output: Path, options: CompressOptions) -> str:
+    engines: list[tuple[str, Callable[[], bool]]] = []
     gifsicle = get_tool_executable(["gifsicle"])
     if gifsicle:
         quality = adjust_quality(options.quality, options.quality_profile)
-        if run_gifsicle(gifsicle, source, output, options.lossless, quality, options.quality_profile):
-            return
+        engines.append(
+            (
+                "gifsicle",
+                lambda: run_gifsicle(gifsicle, source, output, options.lossless, quality, options.quality_profile),
+            )
+        )
+    engine = _run_engine_chain(engines)
+    if engine:
+        return engine
     with Image.open(source) as image:
         frames = [frame.copy() for frame in ImageSequence.Iterator(image)]
         if not frames:
             image.save(output, format="GIF", optimize=True)
-            return
+            return "Pillow"
         if options.lossless:
             save_gif(frames, image, output, optimize=True)
         else:
@@ -158,6 +204,7 @@ def compress_gif(source: Path, output: Path, options: CompressOptions) -> None:
             colors = adjust_colors(options.quality_profile, colors)
             reduced = [quantize_image(frame, colors) for frame in frames]
             save_gif(reduced, image, output, optimize=True)
+    return "Pillow"
 
 
 def save_gif(frames: list[Image.Image], original: Image.Image, output: Path, optimize: bool) -> None:
@@ -174,12 +221,15 @@ def save_gif(frames: list[Image.Image], original: Image.Image, output: Path, opt
     )
 
 
-def compress_webp(source: Path, output: Path, options: CompressOptions) -> None:
+def compress_webp(source: Path, output: Path, options: CompressOptions) -> str:
+    engines: list[tuple[str, Callable[[], bool]]] = []
     cwebp = get_tool_executable(["cwebp"])
     if cwebp:
         quality = adjust_quality(options.quality, options.quality_profile)
-        if run_cwebp(cwebp, source, output, options.lossless, quality):
-            return
+        engines.append(("cwebp", lambda: run_cwebp(cwebp, source, output, options.lossless, quality)))
+    engine = _run_engine_chain(engines)
+    if engine:
+        return engine
     with Image.open(source) as image:
         if options.lossless:
             image.save(output, format="WEBP", lossless=True, quality=100, method=6)
@@ -192,12 +242,15 @@ def compress_webp(source: Path, output: Path, options: CompressOptions) -> None:
                 quality=quality,
                 method=6,
             )
+    return "Pillow"
 
 
 def quantize_image(image: Image.Image, colors: int) -> Image.Image:
+    fast_octree = 2
+    median_cut = 0
     if image.mode in {"RGBA", "LA"}:
-        return image.convert("RGBA").quantize(colors=colors, method=Image.FASTOCTREE)
-    return image.convert("RGB").quantize(colors=colors, method=Image.MEDIANCUT)
+        return image.convert("RGBA").quantize(colors=colors, method=fast_octree)
+    return image.convert("RGB").quantize(colors=colors, method=median_cut)
 
 
 def run_jpegtran(jpegtran: str, source: Path, output: Path) -> bool:
@@ -211,7 +264,7 @@ def run_jpegtran(jpegtran: str, source: Path, output: Path) -> bool:
         str(output),
         str(source),
     ]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
@@ -226,7 +279,7 @@ def run_cjpeg(cjpeg: str, source: Path, output: Path, quality: int) -> bool:
         str(output),
         str(source),
     ]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
@@ -246,7 +299,7 @@ def run_gifsicle(
         colors = adjust_colors(profile, colors)
         command += ["--lossy", str(lossy), "--colors", str(colors)]
     command += [str(source), "-o", str(output)]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
@@ -278,28 +331,102 @@ def run_cwebp(cwebp: str, source: Path, output: Path, lossless: bool, quality: i
             "-o",
             str(output),
         ]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
 def get_tool_executable(names: list[str]) -> str | None:
-    base_dirs = []
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        base_dirs.append(Path(meipass))
-    base_dirs.append(Path(__file__).resolve().parent.parent / "vendor")
-    base_dirs.append(Path(sys.executable).resolve().parent)
+    key = tuple(names)
+    with _TOOL_LOCK:
+        cached = _TOOL_CACHE.get(key)
+    if cached is not None or key in _TOOL_CACHE:
+        return cached
+    base_dirs = _get_tool_search_dirs()
     for base in base_dirs:
         for name in names:
             candidates = [base / name, base / f"{name}.exe"]
             for path in candidates:
                 if path.exists():
-                    return str(path)
+                    resolved = str(path)
+                    with _TOOL_LOCK:
+                        _TOOL_CACHE[key] = resolved
+                    return resolved
     for name in names:
         system_path = shutil.which(name)
         if system_path:
+            with _TOOL_LOCK:
+                _TOOL_CACHE[key] = system_path
             return system_path
+    with _TOOL_LOCK:
+        _TOOL_CACHE[key] = None
     return None
+
+
+def _get_tool_search_dirs() -> list[Path]:
+    global _TOOL_DIRS
+    with _TOOL_LOCK:
+        if _TOOL_DIRS is not None:
+            return _TOOL_DIRS
+    base_dirs: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        base_dirs.append(Path(meipass))
+    vendor_root = Path(__file__).resolve().parent.parent / "vendor"
+    platform_key = detect_platform()
+    arch_key = detect_arch()
+    if sys.platform == "darwin":
+        executable = Path(sys.executable).resolve()
+        contents_dir = executable.parent.parent
+        bundle_dirs = [
+            contents_dir / "Resources",
+            contents_dir / "MacOS",
+            contents_dir / "Frameworks",
+        ]
+        for base in bundle_dirs:
+            base_dirs.extend(
+                [
+                    base / "vendor" / platform_key / arch_key,
+                    base / "vendor" / platform_key,
+                    base / "vendor",
+                ]
+            )
+    vendor_dirs = [
+        vendor_root / platform_key / arch_key,
+        vendor_root / platform_key,
+        vendor_root,
+    ]
+    if meipass:
+        vendor_dirs = [
+            Path(meipass) / "vendor" / platform_key / arch_key,
+            Path(meipass) / "vendor" / platform_key,
+            Path(meipass) / "vendor",
+            *vendor_dirs,
+        ]
+    base_dirs.extend(vendor_dirs)
+    base_dirs.append(Path(sys.executable).resolve().parent)
+    with _TOOL_LOCK:
+        _TOOL_DIRS = base_dirs
+    return base_dirs
+
+
+def detect_platform() -> str:
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def detect_arch() -> str:
+    if hasattr(os, "uname"):
+        machine = os.uname().machine.lower()
+    else:
+        machine = platform.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        return "arm64"
+    if machine in {"x86_64", "amd64"}:
+        return "x64"
+    return machine
 
 
 def optimize_jpeg(output: Path) -> None:
@@ -353,7 +480,7 @@ def run_png_optimizer(tool: str, source: Path, output: Path | None = None) -> bo
             command += ["-out", str(output), str(source)]
         else:
             command += [str(source)]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     if output is None:
         return result.returncode == 0
     return result.returncode == 0 and output.exists()
@@ -365,7 +492,7 @@ def optimize_gif(output: Path) -> None:
         return
     temp = output.with_name(f"{output.stem}.__opt{output.suffix}")
     command = [gifsicle, "-O3", "--no-comments", "--no-names", "--no-extensions", str(output), "-o", str(temp)]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     if result.returncode == 0 and temp.exists():
         temp.replace(output)
     elif temp.exists():
@@ -421,6 +548,10 @@ def adjust_lossy(profile: str, lossy: int) -> int:
 
 
 def get_engine_status(lossless: bool) -> dict[str, str]:
+    with _TOOL_LOCK:
+        cached = _ENGINE_STATUS_CACHE.get(lossless)
+    if cached is not None:
+        return cached
     jpg = "Pillow"
     if lossless and get_tool_executable(["jpegtran"]):
         jpg = "jpegtran"
@@ -437,4 +568,31 @@ def get_engine_status(lossless: bool) -> dict[str, str]:
     webp = "Pillow"
     if get_tool_executable(["cwebp"]):
         webp = "cwebp"
-    return {"JPG": jpg, "PNG": png, "GIF": gif, "WebP": webp}
+    result = {"JPG": jpg, "PNG": png, "GIF": gif, "WebP": webp}
+    with _TOOL_LOCK:
+        _ENGINE_STATUS_CACHE[lossless] = result
+    return result
+
+
+def run_command(command: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(command, capture_output=True, creationflags=WINDOWS_CREATIONFLAGS)
+
+
+def get_engine_registry() -> dict[str, Callable[[Path, Path, CompressOptions], str]]:
+    global _ENGINE_REGISTRY
+    if not _ENGINE_REGISTRY:
+        _ENGINE_REGISTRY = {
+            "jpg": compress_jpeg,
+            "jpeg": compress_jpeg,
+            "png": compress_png,
+            "gif": compress_gif,
+            "webp": compress_webp,
+        }
+    return _ENGINE_REGISTRY
+
+
+def set_engine_registry(
+    registry: dict[str, Callable[[Path, Path, CompressOptions], str]]
+) -> None:
+    global _ENGINE_REGISTRY
+    _ENGINE_REGISTRY = dict(registry)

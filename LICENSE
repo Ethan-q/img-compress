@@ -19,3 +19,8 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+# 新增：Qt库的版权声明（固定格式，直接加）
+Copyright (c) The Qt Company Ltd. and other contributors
+Qt is licensed under the GNU Lesser General Public License version 3 (LGPLv3),
+see https://www.qt.io/licensing/ for details.

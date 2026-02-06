@@ -22,6 +22,7 @@ class CompressResult:
     compressed_size: int
     success: bool
     message: str
+    engine: str
 
 
 def iter_image_files(root: Path, formats: Iterable[str]) -> list[Path]:

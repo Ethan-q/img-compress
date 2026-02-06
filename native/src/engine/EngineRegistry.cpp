@@ -1,0 +1,400 @@
+#include "EngineRegistry.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QPair>
+#include <QProcess>
+#include <QSysInfo>
+#include <QTemporaryFile>
+
+namespace {
+QString normalizeProfile(const QString &profile) {
+    if (profile.contains("强")) {
+        return "strong";
+    }
+    if (profile.contains("均衡")) {
+        return "balanced";
+    }
+    if (profile == "strong" || profile == "balanced" || profile == "high") {
+        return profile;
+    }
+    return "high";
+}
+
+int adjustQuality(int quality, const QString &profile) {
+    const QString normalized = normalizeProfile(profile);
+    if (normalized == "strong") {
+        return qMax(8, quality - 18);
+    }
+    if (normalized == "balanced") {
+        return qMax(10, quality - 10);
+    }
+    return quality;
+}
+
+QPair<int, int> getPngquantSettings(const QString &profile, int quality) {
+    const QString normalized = normalizeProfile(profile);
+    int rangeSize = 14;
+    int speed = 3;
+    if (normalized == "strong") {
+        rangeSize = 34;
+        speed = 5;
+    } else if (normalized == "balanced") {
+        rangeSize = 24;
+        speed = 4;
+    }
+    const int minQ = qMax(20, quality - rangeSize);
+    return qMakePair(minQ, speed);
+}
+
+int adjustLossy(const QString &profile, int lossy) {
+    const QString normalized = normalizeProfile(profile);
+    if (normalized == "strong") {
+        return qMin(200, static_cast<int>(lossy * 1.6));
+    }
+    if (normalized == "balanced") {
+        return qMin(200, static_cast<int>(lossy * 1.35));
+    }
+    return lossy;
+}
+
+int adjustColors(const QString &profile, int colors) {
+    const QString normalized = normalizeProfile(profile);
+    if (normalized == "strong") {
+        return qMax(32, static_cast<int>(colors * 0.6));
+    }
+    if (normalized == "balanced") {
+        return qMax(32, static_cast<int>(colors * 0.75));
+    }
+    return colors;
+}
+
+QString detectPlatform() {
+    const QString product = QSysInfo::productType().toLower();
+    if (product == "osx" || product == "macos" || product == "darwin") {
+        return "macos";
+    }
+    if (product == "windows" || product == "win") {
+        return "windows";
+    }
+    if (product == "linux") {
+        return "linux";
+    }
+    return product;
+}
+
+QString detectArch() {
+    const QString arch = QSysInfo::currentCpuArchitecture().toLower();
+    if (arch.contains("arm64") || arch.contains("aarch64")) {
+        return "arm64";
+    }
+    if (arch.contains("x86_64") || arch.contains("amd64")) {
+        return "x64";
+    }
+    return arch;
+}
+
+QStringList collectVendorBases(const QDir &startDir, const QString &platformKey, const QString &archKey) {
+    QStringList bases;
+    QDir current = startDir;
+    for (int depth = 0; depth < 5; ++depth) {
+        const QString vendorRoot = current.filePath("vendor");
+        if (QDir(vendorRoot).exists()) {
+            bases << vendorRoot
+                  << QDir(vendorRoot).filePath(QString("%1/%2").arg(platformKey, archKey))
+                  << QDir(vendorRoot).filePath(QString("%1").arg(platformKey));
+        }
+        if (!current.cdUp()) {
+            break;
+        }
+    }
+    return bases;
+}
+
+QString findTool(const QStringList &names) {
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString platformKey = detectPlatform();
+    const QString archKey = detectArch();
+    QStringList baseDirs = {
+        appDir,
+        QDir(appDir).filePath("vendor"),
+        QDir(appDir).filePath(QString("vendor/%1/%2").arg(platformKey, archKey)),
+        QDir(appDir).filePath(QString("vendor/%1").arg(platformKey)),
+        QDir(appDir).filePath("../Resources"),
+        QDir(appDir).filePath("../Resources/vendor"),
+        QDir(appDir).filePath(QString("../Resources/vendor/%1/%2").arg(platformKey, archKey)),
+        QDir(appDir).filePath(QString("../Resources/vendor/%1").arg(platformKey)),
+        QDir(appDir).filePath("../MacOS"),
+        QDir(appDir).filePath("../MacOS/vendor"),
+        QDir(appDir).filePath(QString("../MacOS/vendor/%1/%2").arg(platformKey, archKey)),
+        QDir(appDir).filePath(QString("../MacOS/vendor/%1").arg(platformKey)),
+        QDir(appDir).filePath("../Frameworks"),
+        QDir(appDir).filePath("../Frameworks/vendor"),
+        QDir(appDir).filePath(QString("../Frameworks/vendor/%1/%2").arg(platformKey, archKey)),
+        QDir(appDir).filePath(QString("../Frameworks/vendor/%1").arg(platformKey)),
+    };
+    baseDirs += collectVendorBases(QDir(appDir), platformKey, archKey);
+    for (const QString &base : baseDirs) {
+        for (const QString &name : names) {
+            const QString candidate = QDir(base).filePath(name);
+            if (QFileInfo::exists(candidate)) {
+                return candidate;
+            }
+            const QString exeCandidate = QDir(base).filePath(name + ".exe");
+            if (QFileInfo::exists(exeCandidate)) {
+                return exeCandidate;
+            }
+        }
+    }
+    return {};
+}
+
+bool runProcess(const QString &program, const QStringList &args) {
+    QProcess process;
+    process.setProgram(program);
+    process.setArguments(args);
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    process.waitForFinished(-1);
+    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+CompressionResult copyOriginal(const QString &source, const QString &output) {
+    QFile::remove(output);
+    QFile::copy(source, output);
+    const qint64 originalSize = QFileInfo(source).size();
+    const qint64 outputSize = QFileInfo(output).size();
+    return {true, originalSize, outputSize, "原图", "缺少引擎，已保留原图"};
+}
+
+CompressionResult missingEngine(const QString &source, const QString &engine) {
+    const qint64 originalSize = QFileInfo(source).size();
+    return {false, originalSize, originalSize, engine, "缺少引擎"};
+}
+}
+
+QStringList EngineRegistry::availableEngines() {
+    return {"jpegtran", "mozjpeg", "pngquant", "oxipng", "optipng", "gifsicle", "cwebp", "dwebp"};
+}
+
+QString EngineRegistry::engineStatus(bool lossless) {
+    const QString jpegtran = findTool({"jpegtran"});
+    const QString cjpeg = findTool({"cjpeg", "mozjpeg"});
+    const QString pngquant = findTool({"pngquant"});
+    const QString oxipng = findTool({"oxipng"});
+    const QString optipng = findTool({"optipng"});
+    const QString gifsicle = findTool({"gifsicle"});
+    const QString cwebp = findTool({"cwebp"});
+    const QString dwebp = findTool({"dwebp"});
+    const QString jpgLossless = jpegtran.isEmpty() ? "不可用" : "jpegtran";
+    const QString jpgLossy = cjpeg.isEmpty() ? "不可用" : "mozjpeg";
+    const QString pngLossless = !oxipng.isEmpty() ? "oxipng" : (!optipng.isEmpty() ? "optipng" : "不可用");
+    const QString pngLossy = pngquant.isEmpty() ? "不可用" : "pngquant";
+    const QString gifEngine = gifsicle.isEmpty() ? "不可用" : "gifsicle";
+    const QString webpEncode = cwebp.isEmpty() ? "不可用" : "cwebp";
+    const QString webpDecode = dwebp.isEmpty() ? "不可用" : "dwebp";
+    const QString mode = lossless ? "无损优先" : "有损优先";
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString platformKey = detectPlatform();
+    const QString archKey = detectArch();
+    const QString productType = QSysInfo::productType();
+    const QString resourceVendor = QDir(appDir).filePath(QString("../Resources/vendor/%1/%2").arg(platformKey, archKey));
+    const bool anyFound = !jpegtran.isEmpty() || !cjpeg.isEmpty() || !pngquant.isEmpty()
+        || !oxipng.isEmpty() || !optipng.isEmpty() || !gifsicle.isEmpty() || !cwebp.isEmpty()
+        || !dwebp.isEmpty();
+    QString status = QString("引擎状态(%1)：JPG 无损(%2) 有损(%3)；PNG 无损(%4) 有损(%5)；GIF(%6)；WebP 编码(%7) 解码(%8)")
+        .arg(mode, jpgLossless, jpgLossy, pngLossless, pngLossy, gifEngine, webpEncode, webpDecode);
+    status += QString(" | 平台 %1/%2(%3)").arg(platformKey, archKey, productType);
+    status += QString(" | vendor(Resources) %1").arg(QDir(resourceVendor).exists() ? "存在" : "缺失");
+    if (!anyFound) {
+        status += "。未检测到压缩工具，可能未打包或路径未包含 vendor";
+    }
+    return status;
+}
+
+CompressionResult EngineRegistry::compressFile(
+    const QString &source,
+    const QString &output,
+    const CompressionOptions &options
+) {
+    const QString suffix = QFileInfo(source).suffix().toLower();
+    const qint64 originalSize = QFileInfo(source).size();
+    const QString outputFormat = options.outputFormat.toLower();
+    if (outputFormat == "gif" && suffix != "gif") {
+        return {false, originalSize, originalSize, "gifsicle", "不支持转换为GIF"};
+    }
+    if (outputFormat == "webp" && suffix != "webp") {
+        const QString cwebp = findTool({"cwebp"});
+        if (cwebp.isEmpty()) {
+            return missingEngine(source, "cwebp");
+        }
+        QStringList args;
+        if (options.lossless) {
+            args = {"-lossless", "-z", "9", "-m", "5", "-metadata", "none", source, "-o", output};
+        } else {
+            const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
+            args = {"-q", QString::number(quality), "-m", "5", "-metadata", "none", source, "-o", output};
+        }
+        const bool ok = runProcess(cwebp, args);
+        const qint64 outputSize = QFileInfo(output).size();
+        return {ok, originalSize, outputSize, "cwebp", ok ? "成功" : "失败"};
+    }
+    if (suffix == "webp" && (outputFormat == "jpg" || outputFormat == "jpeg" || outputFormat == "png")) {
+        const QString dwebp = findTool({"dwebp"});
+        if (dwebp.isEmpty()) {
+            return {false, originalSize, originalSize, "dwebp", "不支持：缺少 dwebp"};
+        }
+        if (outputFormat == "png") {
+            const QStringList args = {"-quiet", "-png", source, "-o", output};
+            const bool ok = runProcess(dwebp, args);
+            const qint64 outputSize = QFileInfo(output).size();
+            return {ok, originalSize, outputSize, "dwebp", ok ? "成功" : "失败"};
+        }
+        const QString cjpeg = findTool({"cjpeg", "mozjpeg"});
+        if (cjpeg.isEmpty()) {
+            return missingEngine(source, "mozjpeg");
+        }
+        QTemporaryFile temp(QDir(QFileInfo(output).absolutePath()).filePath(".imgcompress_tmp_XXXXXX.ppm"));
+        temp.setAutoRemove(true);
+        if (!temp.open()) {
+            return {false, originalSize, originalSize, "dwebp", "无法创建临时文件"};
+        }
+        const QString tempPath = temp.fileName();
+        temp.close();
+        const QStringList decodeArgs = {"-quiet", "-ppm", source, "-o", tempPath};
+        const bool decoded = runProcess(dwebp, decodeArgs);
+        if (!decoded) {
+            return {false, originalSize, originalSize, "dwebp", "解码失败"};
+        }
+        const int quality = options.lossless ? 100 : qBound(1, adjustQuality(options.quality, options.profile), 100);
+        const QStringList encodeArgs = {
+            "-quality",
+            QString::number(quality),
+            "-progressive",
+            "-optimize",
+            "-outfile",
+            output,
+            tempPath
+        };
+        const bool ok = runProcess(cjpeg, encodeArgs);
+        const qint64 outputSize = QFileInfo(output).size();
+        return {ok, originalSize, outputSize, "dwebp+mozjpeg", ok ? "成功" : "失败"};
+    }
+    if (suffix == "jpg" || suffix == "jpeg") {
+        if (options.lossless) {
+            const QString jpegtran = findTool({"jpegtran"});
+            if (jpegtran.isEmpty()) {
+                return missingEngine(source, "jpegtran");
+            }
+            const QStringList args = {
+                "-copy",
+                "none",
+                "-optimize",
+                "-progressive",
+                "-outfile",
+                output,
+                source
+            };
+            const bool ok = runProcess(jpegtran, args);
+            const qint64 outputSize = QFileInfo(output).size();
+            return {ok, originalSize, outputSize, "jpegtran", ok ? "成功" : "失败"};
+        }
+        const QString cjpeg = findTool({"cjpeg", "mozjpeg"});
+        if (cjpeg.isEmpty()) {
+            return missingEngine(source, "mozjpeg");
+        }
+        const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
+        const QStringList args = {
+            "-quality",
+            QString::number(quality),
+            "-progressive",
+            "-optimize",
+            "-outfile",
+            output,
+            source
+        };
+        const bool ok = runProcess(cjpeg, args);
+        const qint64 outputSize = QFileInfo(output).size();
+        return {ok, originalSize, outputSize, "mozjpeg", ok ? "成功" : "失败"};
+    }
+    if (suffix == "png") {
+        if (!options.lossless) {
+            const QString pngquant = findTool({"pngquant"});
+            if (!pngquant.isEmpty()) {
+                const int quality = qBound(10, adjustQuality(options.quality, options.profile), 100);
+                const auto settings = getPngquantSettings(options.profile, quality);
+                const QStringList args = {
+                    "--quality",
+                    QString("%1-%2").arg(settings.first).arg(quality),
+                    "--speed",
+                    QString::number(settings.second),
+                    "--strip",
+                    "--skip-if-larger",
+                    "--output",
+                    output,
+                    "--force",
+                    source
+                };
+                const bool ok = runProcess(pngquant, args);
+                const qint64 outputSize = QFileInfo(output).size();
+                if (ok) {
+                    return {true, originalSize, outputSize, "pngquant", "成功"};
+                }
+            }
+        }
+        const QString optimizer = findTool({"oxipng", "optipng"});
+        if (optimizer.isEmpty()) {
+            return missingEngine(source, "oxipng/optipng");
+        }
+        QStringList args;
+        const QString normalized = normalizeProfile(options.profile);
+        if (optimizer.contains("oxipng")) {
+            const QString level = normalized == "strong" ? "6" : (normalized == "balanced" ? "5" : "4");
+            args = {"-o", level, "--strip", "all", "-out", output, source};
+        } else {
+            const QString level = normalized == "strong" ? "6" : (normalized == "balanced" ? "6" : "5");
+            args = {QString("-o%1").arg(level), "-strip", "all", "-out", output, source};
+        }
+        const bool ok = runProcess(optimizer, args);
+        const qint64 outputSize = QFileInfo(output).size();
+        return {ok, originalSize, outputSize, optimizer.contains("oxipng") ? "oxipng" : "optipng", ok ? "成功" : "失败"};
+    }
+    if (suffix == "gif") {
+        const QString gifsicle = findTool({"gifsicle"});
+        if (gifsicle.isEmpty()) {
+            return missingEngine(source, "gifsicle");
+        }
+        QStringList args = {"-O3", "--no-comments", "--no-names", "--no-extensions"};
+        if (!options.lossless) {
+            const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
+            int lossy = qMax(0, static_cast<int>((100 - quality) * 2));
+            lossy = adjustLossy(options.profile, lossy);
+            int colors = qMax(32, static_cast<int>(256 * quality / 100));
+            colors = adjustColors(options.profile, colors);
+            args << "--lossy" << QString::number(lossy) << "--colors" << QString::number(colors);
+        }
+        args << source << "-o" << output;
+        const bool ok = runProcess(gifsicle, args);
+        const qint64 outputSize = QFileInfo(output).size();
+        return {ok, originalSize, outputSize, "gifsicle", ok ? "成功" : "失败"};
+    }
+    if (suffix == "webp") {
+        const QString cwebp = findTool({"cwebp"});
+        if (cwebp.isEmpty()) {
+            return missingEngine(source, "cwebp");
+        }
+        QStringList args;
+        if (options.lossless) {
+            args = {"-lossless", "-z", "9", "-m", "5", "-metadata", "none", source, "-o", output};
+        } else {
+            const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
+            args = {"-q", QString::number(quality), "-m", "5", "-metadata", "none", source, "-o", output};
+        }
+        const bool ok = runProcess(cwebp, args);
+        const qint64 outputSize = QFileInfo(output).size();
+        return {ok, originalSize, outputSize, "cwebp", ok ? "成功" : "失败"};
+    }
+    return {false, originalSize, originalSize, "无", "不支持的格式"};
+}

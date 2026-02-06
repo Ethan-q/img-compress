@@ -26,6 +26,74 @@ def run_command(command: list[str], cwd: Path, env: dict[str, str] | None = None
         raise SystemExit(process.returncode)
 
 
+def resolve_codesign(env: dict[str, str]) -> str:
+    codesign = shutil.which("codesign")
+    if codesign is None:
+        raise SystemExit("未找到 codesign")
+    return codesign
+
+
+def sign_item(path: Path, env: dict[str, str]) -> None:
+    codesign = resolve_codesign(env)
+    identity = env.get("SIGN_IDENTITY", "-")
+    run_command(
+        [
+            codesign,
+            "--force",
+            "--sign",
+            identity,
+            "--timestamp=none",
+            str(path),
+        ],
+        path.parent,
+        env,
+    )
+
+
+def is_macho_file(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            magic = handle.read(4)
+    except OSError:
+        return False
+    return magic in {
+        b"\xfe\xed\xfa\xce",
+        b"\xfe\xed\xfa\xcf",
+        b"\xcf\xfa\xed\xfe",
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+        b"\xca\xfe\xba\xbf",
+        b"\xbf\xba\xfe\xca",
+    }
+
+
+def iter_macho_files(app_path: Path):
+    seen: set[str] = set()
+    for root, _, files in os.walk(app_path):
+        for name in files:
+            path = Path(root) / name
+            real_path = path
+            if path.is_symlink():
+                try:
+                    real_path = path.resolve()
+                except OSError:
+                    continue
+            if not real_path.exists() or not real_path.is_file():
+                continue
+            if is_macho_file(real_path):
+                key = str(real_path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield real_path
+
+
+def sign_app(app_path: Path, env: dict[str, str]) -> None:
+    for path in iter_macho_files(app_path):
+        sign_item(path, env)
+    sign_item(app_path, env)
+
+
 def main() -> None:
     root_dir = Path(__file__).resolve().parent
     build_py = root_dir / "build.py"
@@ -35,11 +103,7 @@ def main() -> None:
     if not dist_app.exists():
         raise SystemExit(f"未找到应用包：{dist_app}")
     print("开始 codesign...")
-    run_command(
-        ["codesign", "--force", "--deep", "--sign", "-", str(dist_app)],
-        root_dir,
-        dict(os.environ),
-    )
+    sign_app(dist_app, dict(os.environ))
     staging_dir = Path(tempfile.mkdtemp(prefix="imgcompress_dmg_"))
     app_target = staging_dir / "Imgcompress.app"
     shutil.copytree(dist_app, app_target)

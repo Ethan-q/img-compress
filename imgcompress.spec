@@ -3,55 +3,13 @@ import shutil
 import sys
 from pathlib import Path
 
-import PySide6
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 block_cipher = None
 
 
-def _collect_qt_binaries() -> list[tuple[str, str]]:
-    base_dir = Path(PySide6.__file__).resolve().parent
-    plugins_root = base_dir / "Qt" / "plugins"
-    binaries: list[tuple[str, str]] = []
-    for group in ("platforms", "imageformats", "styles", "iconengines", "platformthemes"):
-        target_dir = plugins_root / group
-        if not target_dir.is_dir():
-            continue
-        for root, _, files in os.walk(target_dir):
-            for name in files:
-                path = os.path.join(root, name)
-                rel_root = Path(root).relative_to(base_dir)
-                dest_dir = str(Path("PySide6") / rel_root)
-                binaries.append((path, dest_dir))
-    return binaries
-
-
-def _collect_qt_libs() -> list[tuple[str, str]]:
-    base_dir = Path(PySide6.__file__).resolve().parent
-    lib_dir = base_dir / "Qt" / "lib"
-    binaries: list[tuple[str, str]] = []
-    if not lib_dir.is_dir():
-        return binaries
-    for root, _, files in os.walk(lib_dir):
-        for name in files:
-            path = os.path.join(root, name)
-            rel_root = Path(root).relative_to(base_dir)
-            dest_dir = str(Path("PySide6") / rel_root)
-            binaries.append((path, dest_dir))
-    return binaries
-
-
-def _collect_qt_datas() -> list[tuple[str, str]]:
-    base_dir = Path(PySide6.__file__).resolve().parent
-    qt_dir = base_dir / "Qt"
-    datas: list[tuple[str, str]] = []
-    qt_conf = qt_dir / "qt.conf"
-    if qt_conf.exists():
-        datas.append((str(qt_conf), str(Path("PySide6") / "Qt")))
-    return datas
-
-
-qt_binaries = _collect_qt_binaries() + _collect_qt_libs()
-qt_datas = _collect_qt_datas()
+qt_binaries = collect_dynamic_libs("PySide6")
+qt_datas = collect_data_files("PySide6", include_py_files=False)
 qt_hiddenimports = [
     "PySide6.QtCore",
     "PySide6.QtGui",

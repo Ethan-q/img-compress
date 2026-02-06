@@ -24,6 +24,9 @@ set(APP_SOURCES
 
 if(APPLE)
     add_executable(ImgcompressNative MACOSX_BUNDLE ${APP_SOURCES})
+    set_target_properties(ImgcompressNative PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+    )
 else()
     add_executable(ImgcompressNative ${APP_SOURCES})
 endif()

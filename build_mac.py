@@ -50,6 +50,10 @@ def sign_item(path: Path, env: dict[str, str]) -> None:
     )
 
 
+def copy_app(src: Path, dst: Path) -> None:
+    shutil.copytree(src, dst, symlinks=True, copy_function=shutil.copy2)
+
+
 def is_macho_file(path: Path) -> bool:
     try:
         with path.open("rb") as handle:
@@ -106,7 +110,7 @@ def main() -> None:
     sign_app(dist_app, dict(os.environ))
     staging_dir = Path(tempfile.mkdtemp(prefix="imgcompress_dmg_"))
     app_target = staging_dir / "Imgcompress.app"
-    shutil.copytree(dist_app, app_target)
+    copy_app(dist_app, app_target)
     apps_link = staging_dir / "Applications"
     if apps_link.exists():
         apps_link.unlink()

@@ -75,6 +75,10 @@ def copy_plugin_files(plugin_dir: Path, app_path: Path, group: str, names: list[
             shutil.copy2(src, dest_dir / name)
 
 
+def copy_app(src: Path, dst: Path) -> None:
+    shutil.copytree(src, dst, symlinks=True, copy_function=shutil.copy2)
+
+
 def resolve_codesign(env: dict[str, str]) -> str:
     codesign = shutil.which("codesign")
     if codesign is None:
@@ -102,12 +106,6 @@ def sign_item(path: Path, env: dict[str, str]) -> None:
         path.parent,
         env,
     )
-
-
-def has_framework_info(framework_path: Path) -> bool:
-    return (framework_path / "Resources" / "Info.plist").exists() or (
-        framework_path / "Versions" / "Current" / "Resources" / "Info.plist"
-    ).exists()
 
 
 def is_macho_file(path: Path) -> bool:
@@ -171,6 +169,12 @@ def deploy_vendor(app_path: Path, repo_dir: Path) -> None:
         if vendor_dst.exists():
             shutil.rmtree(vendor_dst)
         shutil.copytree(vendor_src, vendor_dst)
+
+
+def has_framework_info(framework_path: Path) -> bool:
+    return (framework_path / "Resources" / "Info.plist").exists() or (
+        framework_path / "Versions" / "Current" / "Resources" / "Info.plist"
+    ).exists()
 
 
 def sign_app(app_path: Path, env: dict[str, str]) -> None:
@@ -248,14 +252,13 @@ def main() -> None:
     dist_app = dist_dir / "ImgcompressNative.app"
     if dist_app.exists():
         shutil.rmtree(dist_app)
-    shutil.copytree(app_path, dist_app)
+    copy_app(app_path, dist_app)
     sign_app(dist_app, env)
     staging_dir = Path(tempfile.mkdtemp(prefix="imgcompress_native_dmg_"))
     keep_staging = env.get("KEEP_STAGING", "").lower() in {"1", "true", "yes"}
     try:
         app_target = staging_dir / "ImgcompressNative.app"
-        shutil.copytree(dist_app, app_target)
-        sign_app(app_target, env)
+        copy_app(dist_app, app_target)
         apps_link = staging_dir / "Applications"
         if apps_link.exists():
             apps_link.unlink()

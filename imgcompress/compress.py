@@ -368,6 +368,22 @@ def _get_tool_search_dirs() -> list[Path]:
     vendor_root = Path(__file__).resolve().parent.parent / "vendor"
     platform_key = detect_platform()
     arch_key = detect_arch()
+    if sys.platform == "darwin":
+        executable = Path(sys.executable).resolve()
+        contents_dir = executable.parent.parent
+        bundle_dirs = [
+            contents_dir / "Resources",
+            contents_dir / "MacOS",
+            contents_dir / "Frameworks",
+        ]
+        for base in bundle_dirs:
+            base_dirs.extend(
+                [
+                    base / "vendor" / platform_key / arch_key,
+                    base / "vendor" / platform_key,
+                    base / "vendor",
+                ]
+            )
     vendor_dirs = [
         vendor_root / platform_key / arch_key,
         vendor_root / platform_key,

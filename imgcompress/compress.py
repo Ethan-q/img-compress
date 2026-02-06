@@ -12,6 +12,10 @@ from PIL import Image, ImageSequence
 
 from .models import CompressOptions, CompressResult
 
+WINDOWS_CREATIONFLAGS = (
+    getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform.startswith("win") else 0
+)
+
 
 def compress_files(files: Iterable[Path], options: CompressOptions) -> list[CompressResult]:
     results = []
@@ -137,7 +141,7 @@ def run_pngquant(
         "--force",
         str(source),
     ]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
@@ -215,7 +219,7 @@ def run_jpegtran(jpegtran: str, source: Path, output: Path) -> bool:
         str(output),
         str(source),
     ]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
@@ -230,7 +234,7 @@ def run_cjpeg(cjpeg: str, source: Path, output: Path, quality: int) -> bool:
         str(output),
         str(source),
     ]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
@@ -250,7 +254,7 @@ def run_gifsicle(
         colors = adjust_colors(profile, colors)
         command += ["--lossy", str(lossy), "--colors", str(colors)]
     command += [str(source), "-o", str(output)]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
@@ -282,7 +286,7 @@ def run_cwebp(cwebp: str, source: Path, output: Path, lossless: bool, quality: i
             "-o",
             str(output),
         ]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     return result.returncode == 0 and output.exists()
 
 
@@ -392,7 +396,7 @@ def run_png_optimizer(tool: str, source: Path, output: Path | None = None) -> bo
             command += ["-out", str(output), str(source)]
         else:
             command += [str(source)]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     if output is None:
         return result.returncode == 0
     return result.returncode == 0 and output.exists()
@@ -404,7 +408,7 @@ def optimize_gif(output: Path) -> None:
         return
     temp = output.with_name(f"{output.stem}.__opt{output.suffix}")
     command = [gifsicle, "-O3", "--no-comments", "--no-names", "--no-extensions", str(output), "-o", str(temp)]
-    result = subprocess.run(command, capture_output=True)
+    result = run_command(command)
     if result.returncode == 0 and temp.exists():
         temp.replace(output)
     elif temp.exists():
@@ -477,3 +481,7 @@ def get_engine_status(lossless: bool) -> dict[str, str]:
     if get_tool_executable(["cwebp"]):
         webp = "cwebp"
     return {"JPG": jpg, "PNG": png, "GIF": gif, "WebP": webp}
+
+
+def run_command(command: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(command, capture_output=True, creationflags=WINDOWS_CREATIONFLAGS)

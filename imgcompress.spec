@@ -55,7 +55,7 @@ exe = EXE(
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
+    argv_emulation=sys.platform == "darwin",
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
@@ -66,7 +66,7 @@ if sys.platform == "darwin":
         exe,
         name="Imgcompress.app",
         icon=None,
-        bundle_identifier=None,
+        bundle_identifier="com.imgcompress.app",
     )
 else:
     app = exe

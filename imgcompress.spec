@@ -78,7 +78,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
-    exclude_binaries=sys.platform == "darwin",
+    exclude_binaries=False,
     disable_windowed_traceback=False,
     argv_emulation=sys.platform == "darwin",
     target_arch=None,
@@ -87,18 +87,8 @@ exe = EXE(
 )
 
 if sys.platform == "darwin":
-    coll = COLLECT(
-        exe,
-        a.binaries,
-        a.zipfiles,
-        a.datas,
-        name="Imgcompress",
-        strip=False,
-        upx=False,
-        upx_exclude=[],
-    )
     app = BUNDLE(
-        coll,
+        exe,
         name="Imgcompress.app",
         icon=None,
         bundle_identifier="com.imgcompress.app",

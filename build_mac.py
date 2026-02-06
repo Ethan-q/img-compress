@@ -33,16 +33,21 @@ def resolve_codesign(env: dict[str, str]) -> str:
     return codesign
 
 
+def build_codesign_args(identity: str) -> list[str]:
+    args = ["--force", "--sign", identity]
+    if identity == "-":
+        args.append("--timestamp=none")
+        return args
+    return [*args, "--timestamp", "--options", "runtime"]
+
+
 def sign_item(path: Path, env: dict[str, str]) -> None:
     codesign = resolve_codesign(env)
     identity = env.get("SIGN_IDENTITY", "-")
     run_command(
         [
             codesign,
-            "--force",
-            "--sign",
-            identity,
-            "--timestamp=none",
+            *build_codesign_args(identity),
             str(path),
         ],
         path.parent,
@@ -52,6 +57,81 @@ def sign_item(path: Path, env: dict[str, str]) -> None:
 
 def copy_app(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, symlinks=True, copy_function=shutil.copy2)
+
+
+def resolve_qtpaths(env: dict[str, str]) -> str:
+    qtpaths_env = env.get("QT_PATHS")
+    if qtpaths_env:
+        return qtpaths_env
+    candidates = [
+        shutil.which("qtpaths"),
+        shutil.which("qtpaths6"),
+        "/opt/homebrew/opt/qt/bin/qtpaths",
+        "/opt/homebrew/opt/qt/bin/qtpaths6",
+        "/usr/local/opt/qt/bin/qtpaths",
+        "/usr/local/opt/qt/bin/qtpaths6",
+    ]
+    for item in candidates:
+        if item and Path(item).exists():
+            return str(item)
+    raise SystemExit("未找到 qtpaths 或 qtpaths6")
+
+
+def read_qt_plugin_dir(env: dict[str, str]) -> Path:
+    qtpaths = resolve_qtpaths(env)
+    output = subprocess.check_output([qtpaths, "--plugin-dir"], text=True, env=env).strip()
+    if not output:
+        raise SystemExit("无法获取 Qt 插件目录")
+    return Path(output)
+
+
+def copy_plugin_files(plugin_dir: Path, app_path: Path, group: str, names: list[str]) -> None:
+    src_dir = plugin_dir / group
+    if not src_dir.exists():
+        return
+    dest_dir = app_path / "Contents" / "PlugIns" / group
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        src = src_dir / name
+        if src.exists():
+            shutil.copy2(src, dest_dir / name)
+
+
+def deploy_qt_plugins(app_path: Path, env: dict[str, str]) -> None:
+    plugin_dir = read_qt_plugin_dir(env)
+    copy_plugin_files(plugin_dir, app_path, "platforms", ["libqcocoa.dylib"])
+    copy_plugin_files(
+        plugin_dir,
+        app_path,
+        "imageformats",
+        ["libqjpeg.dylib", "libqpng.dylib", "libqgif.dylib", "libqwebp.dylib"],
+    )
+    copy_plugin_files(plugin_dir, app_path, "styles", ["libqmacstyle.dylib"])
+
+
+def write_qt_conf(app_path: Path) -> None:
+    resources_dir = app_path / "Contents" / "Resources"
+    resources_dir.mkdir(parents=True, exist_ok=True)
+    qt_conf = resources_dir / "qt.conf"
+    qt_conf.write_text("[Paths]\nPlugins=PlugIns\nLibraries=Frameworks\n", encoding="utf-8")
+
+
+def prune_internal_apps(app_path: Path) -> None:
+    for path in app_path.rglob("*.app"):
+        if path == app_path:
+            continue
+        remove_path(path)
+    for path in app_path.rglob("*__dot__app"):
+        if path == app_path:
+            continue
+        remove_path(path)
+
+
+def remove_path(path: Path) -> None:
+    if path.is_symlink():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
 
 
 def is_macho_file(path: Path) -> bool:
@@ -76,6 +156,8 @@ def iter_macho_files(app_path: Path):
     for root, _, files in os.walk(app_path):
         for name in files:
             path = Path(root) / name
+            if any(part.endswith(".framework") for part in path.parts):
+                continue
             real_path = path
             if path.is_symlink():
                 try:
@@ -92,8 +174,34 @@ def iter_macho_files(app_path: Path):
                 yield real_path
 
 
+def has_framework_info(framework_path: Path) -> bool:
+    return (framework_path / "Resources" / "Info.plist").exists() or (
+        framework_path / "Versions" / "Current" / "Resources" / "Info.plist"
+    ).exists()
+
+
+def sign_frameworks(app_path: Path, env: dict[str, str]) -> None:
+    frameworks_root = app_path / "Contents" / "Frameworks"
+    if not frameworks_root.exists():
+        return
+    for framework in sorted(frameworks_root.rglob("*.framework"), key=lambda item: str(item)):
+        if not framework.is_dir():
+            continue
+        framework_binary = framework / "Versions" / "Current" / framework.stem
+        if framework_binary.exists():
+            try:
+                framework_binary = framework_binary.resolve()
+            except OSError:
+                pass
+            sign_item(framework_binary, env)
+        if has_framework_info(framework):
+            sign_item(framework, env)
+
+
 def sign_app(app_path: Path, env: dict[str, str]) -> None:
-    for path in iter_macho_files(app_path):
+    sign_frameworks(app_path, env)
+    targets = sorted(iter_macho_files(app_path), key=lambda item: str(item))
+    for path in targets:
         sign_item(path, env)
     sign_item(app_path, env)
 
@@ -106,6 +214,9 @@ def main() -> None:
     dist_app = root_dir / "dist" / "Imgcompress.app"
     if not dist_app.exists():
         raise SystemExit(f"未找到应用包：{dist_app}")
+    deploy_qt_plugins(dist_app, dict(os.environ))
+    write_qt_conf(dist_app)
+    prune_internal_apps(dist_app)
     print("开始 codesign...")
     sign_app(dist_app, dict(os.environ))
     staging_dir = Path(tempfile.mkdtemp(prefix="imgcompress_dmg_"))

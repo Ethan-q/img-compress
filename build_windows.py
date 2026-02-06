@@ -2,22 +2,27 @@ from pathlib import Path
 import os
 import subprocess
 import sys
+import tempfile
 
 
 def run_command(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> None:
-    result = subprocess.run(
+    process = subprocess.Popen(
         command,
         cwd=str(cwd),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
+        bufsize=1,
+        universal_newlines=True,
         env=env,
     )
-    if result.stdout:
-        print(result.stdout, end="")
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
+    stdout = process.stdout
+    if stdout is not None:
+        for line in stdout:
+            print(line, end="")
+    process.wait()
+    if process.returncode != 0:
+        raise SystemExit(process.returncode)
 
 
 def main() -> None:
@@ -26,7 +31,13 @@ def main() -> None:
     cache_dir = root_dir / ".pyinstaller_cache"
     env = dict(os.environ)
     env["PYINSTALLER_CACHE_DIR"] = str(cache_dir)
-    run_command([sys.executable, "-m", "PyInstaller", str(spec_path)], root_dir, env)
+    work_dir = Path(tempfile.mkdtemp(prefix="imgcompress_work_"))
+    print("开始 PyInstaller 打包...")
+    run_command(
+        [sys.executable, "-m", "PyInstaller", "--workpath", str(work_dir), str(spec_path)],
+        root_dir,
+        env,
+    )
     dist_exe = root_dir / "dist" / "Imgcompress.exe"
     if not dist_exe.exists():
         raise SystemExit(f"未找到可执行文件：{dist_exe}")

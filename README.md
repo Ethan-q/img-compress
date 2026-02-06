@@ -33,7 +33,10 @@ python main.py
 - Windows 生成 exe：python build_windows.py
 
 Windows 打包必须在 Windows 上运行，macOS 打包必须在 macOS 上运行。
-macOS 安装方式：打开 dmg 后把 Imgcompress.app 拖到“应用程序”目录，再从“应用程序”启动。
+macOS 产物包含 Imgcompress.dmg 与 Imgcompress.pkg。
+macOS 安装方式：dmg 打开后把 Imgcompress.app 拖到“应用程序”目录；或双击 pkg 进行安装。
+macOS 采用 onedir 方式打包，启动更快但体积略大。
+Windows 产物为 dist/Imgcompress.exe。
 
 为保证所有用户压缩效果与性能一致，建议把以下工具二进制放到项目根目录的 vendor/ 目录中并随包发布（程序会优先使用 vendor 内的工具，不依赖用户电脑是否安装）：
 - pngquant（PNG 有损）

@@ -1,23 +1,37 @@
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+
+
+def run_command(command: list[str], cwd: Path) -> None:
+    process = subprocess.Popen(
+        command,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+    )
+    stdout = process.stdout
+    if stdout is not None:
+        for line in stdout:
+            print(line, end="")
+    process.wait()
+    if process.returncode != 0:
+        raise SystemExit(process.returncode)
 
 
 def main() -> None:
     root_dir = Path(__file__).resolve().parent
     spec_path = root_dir / "imgcompress.spec"
-    result = subprocess.run(
-        [sys.executable, "-m", "PyInstaller", str(spec_path)],
-        cwd=str(root_dir),
-        capture_output=True,
-        text=True,
+    work_dir = Path(tempfile.mkdtemp(prefix="imgcompress_work_"))
+    print("开始 PyInstaller 打包...")
+    run_command(
+        [sys.executable, "-m", "PyInstaller", "--workpath", str(work_dir), str(spec_path)],
+        root_dir,
     )
-    if result.stdout:
-        print(result.stdout, end="")
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
 
 
 if __name__ == "__main__":

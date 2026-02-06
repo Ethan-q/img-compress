@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, QSettings
@@ -42,11 +43,34 @@ class CompressWorker(QObject):
     def run(self) -> None:
         results = []
         total = len(self.files)
-        for index, path in enumerate(self.files, start=1):
-            result = compress_file(path, self.options)
-            results.append(result)
-            percent = int(index * 100 / total)
-            self.progress.emit(percent, path.name, result)
+        if total:
+            file_items = [(path, path.stat().st_size) for path in self.files]
+            file_items.sort(key=lambda item: item[1])
+            total_size = sum(size for _, size in file_items)
+            avg_size = total_size / total
+            cpu = os.cpu_count() or 1
+            if avg_size >= 10 * 1024 * 1024:
+                max_workers = min(2, cpu, total)
+            elif avg_size >= 4 * 1024 * 1024:
+                max_workers = min(3, cpu, total)
+            else:
+                max_workers = min(6, cpu, total)
+            files = [path for path, _ in file_items]
+        else:
+            max_workers = 1
+            files = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(compress_file, path, self.options): path for path in files
+            }
+            completed = 0
+            for future in as_completed(future_map):
+                path = future_map[future]
+                result = future.result()
+                results.append(result)
+                completed += 1
+                percent = int(completed * 100 / total) if total else 100
+                self.progress.emit(percent, path.name, result)
         self.finished.emit(results)
 
 
@@ -56,14 +80,14 @@ class DropArea(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setAcceptDrops(True)
-        self.setFrameShape(QFrame.NoFrame)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self.setMinimumHeight(110)
         self.setStyleSheet(
             "QFrame { border: 1px solid #d0d0d0; border-radius: 8px; background: #fafafa; }"
         )
         layout = QVBoxLayout()
         label = QLabel("拖拽图片/文件夹到此处立即压缩（输出同目录）")
-        label.setAlignment(Qt.AlignCenter)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
         self.setLayout(layout)
 
@@ -96,7 +120,7 @@ class MainWindow(QMainWindow):
         self.output_line = QLineEdit()
         self.files_line = QLineEdit()
         self.lossless_checkbox = QCheckBox("无损压缩")
-        self.quality_slider = QSlider(Qt.Horizontal)
+        self.quality_slider = QSlider(Qt.Orientation.Horizontal)
         self.quality_value = QLabel()
         self.profile_combo = QComboBox()
         self.format_jpg = QCheckBox("JPG")
@@ -210,7 +234,9 @@ class MainWindow(QMainWindow):
             self.output_mode = "mirror"
 
     def pick_output_dir(self) -> None:
-        default_dir = self.output_line.text().strip() or self.settings.value("output_dir", "")
+        cached_dir = self.settings.value("output_dir", "")
+        cached_text = cached_dir if isinstance(cached_dir, str) else ""
+        default_dir = self.output_line.text().strip() or cached_text
         path = QFileDialog.getExistingDirectory(self, "选择输出目录", default_dir)
         if path:
             self.output_line.setText(path)
@@ -352,7 +378,7 @@ class MainWindow(QMainWindow):
                 if result.original_size
                 else 0
             )
-            self.append_log(f"{name} 压缩完成，节省 {ratio:.1%}")
+            self.append_log(f"{name} 压缩完成，节省 {ratio:.1%}，引擎 {result.engine}")
         else:
             self.append_log(f"{name} 压缩失败：{result.message}")
 
@@ -362,6 +388,7 @@ class MainWindow(QMainWindow):
         total_after = sum(result.compressed_size for result in results if result.success)
         saved = total_before - total_after if total_before else 0
         ratio = saved / total_before if total_before else 0
+        self.append_log(self.format_actual_engines(results))
         self.append_log(f"完成：成功 {success_count} 张，节省 {ratio:.1%}")
         self.progress_bar.setValue(100)
 
@@ -402,13 +429,17 @@ class MainWindow(QMainWindow):
 
     def load_settings(self) -> None:
         output_dir = self.settings.value("output_dir", "")
-        if output_dir:
+        if isinstance(output_dir, str) and output_dir:
             self.output_line.setText(output_dir)
 
     def save_output_dir(self, path: str) -> None:
         self.settings.setValue("output_dir", path)
 
-    def ensure_output_dir(self, output_dir: Path, input_dir: Path | None) -> Path | None:
+    def ensure_output_dir(
+        self, output_dir: Path | None, input_dir: Path | None
+    ) -> Path | None:
+        if output_dir is None:
+            return None
         if output_dir.exists() and not output_dir.is_dir():
             return None
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -418,7 +449,28 @@ class MainWindow(QMainWindow):
         status = get_engine_status(lossless)
         parts = [f"{key}={value}" for key, value in status.items()]
         mode = "无损" if lossless else "有损"
-        return f"压缩引擎({mode})：{'，'.join(parts)}"
+        return f"可用引擎({mode})：{'，'.join(parts)}"
+
+    def format_actual_engines(self, results: list[CompressResult]) -> str:
+        if not results:
+            return "实际引擎：无"
+        summary: dict[str, dict[str, int]] = {}
+        for result in results:
+            if not result.success:
+                continue
+            suffix = result.source.suffix.upper().lstrip(".")
+            summary.setdefault(suffix, {})
+            summary[suffix][result.engine] = summary[suffix].get(result.engine, 0) + 1
+        if not summary:
+            return "实际引擎：无"
+        parts = []
+        for suffix in sorted(summary.keys()):
+            engines = summary[suffix]
+            detail = "，".join(
+                f"{engine}({count})" for engine, count in sorted(engines.items())
+            )
+            parts.append(f"{suffix}={detail}")
+        return f"实际引擎：{'；'.join(parts)}"
 
 
 def main() -> None:

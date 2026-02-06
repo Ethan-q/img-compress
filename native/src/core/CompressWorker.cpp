@@ -143,6 +143,12 @@ void CompressWorker::run() {
             emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
             continue;
         }
+        if (options.resizeEnabled && (sourceSuffix == "webp" || targetFormat == "webp")) {
+            emit logMessage(QString("%1 转换失败：启用尺寸裁剪/缩放时不支持 WebP（需要 Qt WebP 插件）").arg(sourceInfo.fileName()));
+            completed += 1;
+            emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
+            continue;
+        }
         if ((convertToWebp || convertFromWebp) && !options.resizeEnabled) {
             result = EngineRegistry::compressFile(file, outputPath, options);
         } else if (options.resizeEnabled || targetFormat != sourceSuffix) {
@@ -154,7 +160,7 @@ void CompressWorker::run() {
             QImage image = reader.read();
             if (image.isNull()) {
                 if (sourceSuffix == "webp") {
-                    emit logMessage(QString("%1 转换失败：WebP 解码不可用").arg(sourceInfo.fileName()));
+                    emit logMessage(QString("%1 转换失败：WebP 解码不可用（缺少 dwebp 或 Qt WebP 插件）").arg(sourceInfo.fileName()));
                 } else {
                     emit logMessage(QString("%1 转换失败：无法读取图片").arg(sourceInfo.fileName()));
                 }

@@ -408,6 +408,9 @@ void MainWindow::setupUi() {
     resizeModeCombo->addItem("宽高等比", 1);
     resizeModeCombo->addItem("强制裁剪", 2);
     resizeModeCombo->setCurrentIndex(0);
+    resizeModeCombo->setMaxVisibleItems(8);
+    resizeModeCombo->setView(new QListView(resizeModeCombo));
+    resizeModeCombo->view()->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     widthInput = new QLineEdit(this);
     heightInput = new QLineEdit(this);
     sizeValidator = new QIntValidator(16, 8192, this);
@@ -417,14 +420,14 @@ void MainWindow::setupUi() {
     heightInput->setFixedWidth(72);
     widthInput->setAlignment(Qt::AlignCenter);
     heightInput->setAlignment(Qt::AlignCenter);
-    widthInput->setText("1080");
-    heightInput->setText("1080");
+    widthInput->setPlaceholderText("宽");
+    heightInput->setPlaceholderText("高");
     widthInput->setEnabled(false);
     heightInput->setEnabled(false);
     connect(resizeModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
         updateCompressionOptionsState();
     });
-    auto *sizeLabel = new QLabel("×", this);
+    sizeLabel = new QLabel("×", this);
     sizeLabel->setAlignment(Qt::AlignCenter);
     sizeLabel->setFixedWidth(12);
     resizeLayout->addWidget(resizeModeCombo);
@@ -843,13 +846,23 @@ void MainWindow::updateCompressionOptionsState() {
     if (lossless) {
         widthInput->setEnabled(false);
         heightInput->setEnabled(false);
+        widthInput->setVisible(false);
+        heightInput->setVisible(false);
+        sizeLabel->setVisible(false);
         resizeModeCombo->setEnabled(false);
     } else {
         const int resizeMode = resizeModeCombo->currentData().toInt();
         const bool resizeEnabled = resizeMode != 0;
         widthInput->setEnabled(resizeEnabled);
         heightInput->setEnabled(resizeEnabled);
+        widthInput->setVisible(resizeEnabled);
+        heightInput->setVisible(resizeEnabled);
+        sizeLabel->setVisible(resizeEnabled);
         resizeModeCombo->setEnabled(true);
+        if (!resizeEnabled) {
+            widthInput->clear();
+            heightInput->clear();
+        }
     }
 }
 

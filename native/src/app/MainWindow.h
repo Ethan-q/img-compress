@@ -87,6 +87,7 @@ private:
     QLineEdit *widthInput;
     QLineEdit *heightInput;
     QIntValidator *sizeValidator;
+    QLabel *sizeLabel;
     QSlider *qualitySlider;
     QLabel *qualityValue;
     QCheckBox *formatJpg;

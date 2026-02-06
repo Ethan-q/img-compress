@@ -244,7 +244,7 @@ CompressionResult EngineRegistry::compressFile(
     if (suffix == "webp" && (outputFormat == "jpg" || outputFormat == "jpeg" || outputFormat == "png")) {
         const QString dwebp = findTool({"dwebp"});
         if (dwebp.isEmpty()) {
-            return missingEngine(source, "dwebp");
+            return {false, originalSize, originalSize, "dwebp", "不支持：缺少 dwebp"};
         }
         if (outputFormat == "png") {
             const QStringList args = {"-quiet", "-png", source, "-o", output};

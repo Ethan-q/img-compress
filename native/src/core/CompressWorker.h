@@ -18,6 +18,13 @@ public:
         const QStringList &formats,
         const CompressionOptions &options
     );
+    void configureFiles(
+        const QStringList &files,
+        const QString &baseDir,
+        const QString &outputDir,
+        const QStringList &formats,
+        const CompressionOptions &options
+    );
 
 public slots:
     void run();
@@ -32,4 +39,6 @@ private:
     QString outputDir;
     QStringList formats;
     CompressionOptions options;
+    QStringList files;
+    bool useFileList;
 };

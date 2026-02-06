@@ -20,7 +20,24 @@ public:
         const QStringList &formats,
         bool lossless,
         int quality,
-        const QString &profile
+        const QString &profile,
+        const QString &outputFormat,
+        bool resizeEnabled,
+        int targetWidth,
+        int targetHeight
+    );
+    void startFiles(
+        const QStringList &files,
+        const QString &baseDir,
+        const QString &outputDir,
+        const QStringList &formats,
+        bool lossless,
+        int quality,
+        const QString &profile,
+        const QString &outputFormat,
+        bool resizeEnabled,
+        int targetWidth,
+        int targetHeight
     );
 
 signals:

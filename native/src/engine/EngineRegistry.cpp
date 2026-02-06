@@ -25,36 +25,36 @@ QString normalizeProfile(const QString &profile) {
 int adjustQuality(int quality, const QString &profile) {
     const QString normalized = normalizeProfile(profile);
     if (normalized == "strong") {
-        return qMax(10, quality - 10);
+        return qMax(9, quality - 12);
     }
     if (normalized == "balanced") {
-        return qMax(10, quality - 4);
+        return qMax(10, quality - 7);
     }
     return quality;
 }
 
 QPair<int, int> getPngquantSettings(const QString &profile, int quality) {
     const QString normalized = normalizeProfile(profile);
-    int rangeSize = 8;
+    int rangeSize = 12;
     int speed = 1;
     if (normalized == "strong") {
-        rangeSize = 25;
+        rangeSize = 28;
         speed = 3;
     } else if (normalized == "balanced") {
-        rangeSize = 15;
-        speed = 2;
+        rangeSize = 20;
+        speed = 3;
     }
-    const int minQ = qMax(10, quality - rangeSize);
+    const int minQ = qMax(25, quality - rangeSize);
     return qMakePair(minQ, speed);
 }
 
 int adjustLossy(const QString &profile, int lossy) {
     const QString normalized = normalizeProfile(profile);
     if (normalized == "strong") {
-        return qMin(200, static_cast<int>(lossy * 1.4));
+        return qMin(200, static_cast<int>(lossy * 1.45));
     }
     if (normalized == "balanced") {
-        return qMin(200, static_cast<int>(lossy * 1.1));
+        return qMin(200, static_cast<int>(lossy * 1.25));
     }
     return lossy;
 }
@@ -62,22 +62,26 @@ int adjustLossy(const QString &profile, int lossy) {
 int adjustColors(const QString &profile, int colors) {
     const QString normalized = normalizeProfile(profile);
     if (normalized == "strong") {
-        return qMax(16, static_cast<int>(colors * 0.7));
+        return qMax(32, static_cast<int>(colors * 0.65));
     }
     if (normalized == "balanced") {
-        return qMax(16, static_cast<int>(colors * 0.85));
+        return qMax(32, static_cast<int>(colors * 0.8));
     }
     return colors;
 }
 
 QString detectPlatform() {
-    if (QSysInfo::productType() == "osx") {
+    const QString product = QSysInfo::productType().toLower();
+    if (product == "osx" || product == "macos" || product == "darwin") {
         return "macos";
     }
-    if (QSysInfo::productType() == "windows") {
+    if (product == "windows" || product == "win") {
         return "windows";
     }
-    return "linux";
+    if (product == "linux") {
+        return "linux";
+    }
+    return product;
 }
 
 QString detectArch() {
@@ -91,11 +95,28 @@ QString detectArch() {
     return arch;
 }
 
+QStringList collectVendorBases(const QDir &startDir, const QString &platformKey, const QString &archKey) {
+    QStringList bases;
+    QDir current = startDir;
+    for (int depth = 0; depth < 5; ++depth) {
+        const QString vendorRoot = current.filePath("vendor");
+        if (QDir(vendorRoot).exists()) {
+            bases << vendorRoot
+                  << QDir(vendorRoot).filePath(QString("%1/%2").arg(platformKey, archKey))
+                  << QDir(vendorRoot).filePath(QString("%1").arg(platformKey));
+        }
+        if (!current.cdUp()) {
+            break;
+        }
+    }
+    return bases;
+}
+
 QString findTool(const QStringList &names) {
     const QString appDir = QCoreApplication::applicationDirPath();
     const QString platformKey = detectPlatform();
     const QString archKey = detectArch();
-    const QStringList baseDirs = {
+    QStringList baseDirs = {
         appDir,
         QDir(appDir).filePath("vendor"),
         QDir(appDir).filePath(QString("vendor/%1/%2").arg(platformKey, archKey)),
@@ -113,6 +134,7 @@ QString findTool(const QStringList &names) {
         QDir(appDir).filePath(QString("../Frameworks/vendor/%1/%2").arg(platformKey, archKey)),
         QDir(appDir).filePath(QString("../Frameworks/vendor/%1").arg(platformKey)),
     };
+    baseDirs += collectVendorBases(QDir(appDir), platformKey, archKey);
     for (const QString &base : baseDirs) {
         for (const QString &name : names) {
             const QString candidate = QDir(base).filePath(name);
@@ -145,10 +167,47 @@ CompressionResult copyOriginal(const QString &source, const QString &output) {
     const qint64 outputSize = QFileInfo(output).size();
     return {true, originalSize, outputSize, "原图", "缺少引擎，已保留原图"};
 }
+
+CompressionResult missingEngine(const QString &source, const QString &engine) {
+    const qint64 originalSize = QFileInfo(source).size();
+    return {false, originalSize, originalSize, engine, "缺少引擎"};
+}
 }
 
 QStringList EngineRegistry::availableEngines() {
     return {"jpegtran", "mozjpeg", "pngquant", "oxipng", "optipng", "gifsicle", "cwebp"};
+}
+
+QString EngineRegistry::engineStatus(bool lossless) {
+    const QString jpegtran = findTool({"jpegtran"});
+    const QString cjpeg = findTool({"cjpeg", "mozjpeg"});
+    const QString pngquant = findTool({"pngquant"});
+    const QString oxipng = findTool({"oxipng"});
+    const QString optipng = findTool({"optipng"});
+    const QString gifsicle = findTool({"gifsicle"});
+    const QString cwebp = findTool({"cwebp"});
+    const QString jpgLossless = jpegtran.isEmpty() ? "不可用" : "jpegtran";
+    const QString jpgLossy = cjpeg.isEmpty() ? "不可用" : "mozjpeg";
+    const QString pngLossless = !oxipng.isEmpty() ? "oxipng" : (!optipng.isEmpty() ? "optipng" : "不可用");
+    const QString pngLossy = pngquant.isEmpty() ? "不可用" : "pngquant";
+    const QString gifEngine = gifsicle.isEmpty() ? "不可用" : "gifsicle";
+    const QString webpEngine = cwebp.isEmpty() ? "不可用" : "cwebp";
+    const QString mode = lossless ? "无损优先" : "有损优先";
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QString platformKey = detectPlatform();
+    const QString archKey = detectArch();
+    const QString productType = QSysInfo::productType();
+    const QString resourceVendor = QDir(appDir).filePath(QString("../Resources/vendor/%1/%2").arg(platformKey, archKey));
+    const bool anyFound = !jpegtran.isEmpty() || !cjpeg.isEmpty() || !pngquant.isEmpty()
+        || !oxipng.isEmpty() || !optipng.isEmpty() || !gifsicle.isEmpty() || !cwebp.isEmpty();
+    QString status = QString("引擎状态(%1)：JPG 无损(%2) 有损(%3)；PNG 无损(%4) 有损(%5)；GIF(%6)；WebP(%7)")
+        .arg(mode, jpgLossless, jpgLossy, pngLossless, pngLossy, gifEngine, webpEngine);
+    status += QString(" | 平台 %1/%2(%3)").arg(platformKey, archKey, productType);
+    status += QString(" | vendor(Resources) %1").arg(QDir(resourceVendor).exists() ? "存在" : "缺失");
+    if (!anyFound) {
+        status += "。未检测到压缩工具，可能未打包或路径未包含 vendor";
+    }
+    return status;
 }
 
 CompressionResult EngineRegistry::compressFile(
@@ -162,7 +221,7 @@ CompressionResult EngineRegistry::compressFile(
         if (options.lossless) {
             const QString jpegtran = findTool({"jpegtran"});
             if (jpegtran.isEmpty()) {
-                return copyOriginal(source, output);
+                return missingEngine(source, "jpegtran");
             }
             const QStringList args = {
                 "-copy",
@@ -179,7 +238,7 @@ CompressionResult EngineRegistry::compressFile(
         }
         const QString cjpeg = findTool({"cjpeg", "mozjpeg"});
         if (cjpeg.isEmpty()) {
-            return copyOriginal(source, output);
+            return missingEngine(source, "mozjpeg");
         }
         const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
         const QStringList args = {
@@ -222,13 +281,16 @@ CompressionResult EngineRegistry::compressFile(
         }
         const QString optimizer = findTool({"oxipng", "optipng"});
         if (optimizer.isEmpty()) {
-            return copyOriginal(source, output);
+            return missingEngine(source, "oxipng/optipng");
         }
         QStringList args;
+        const QString normalized = normalizeProfile(options.profile);
         if (optimizer.contains("oxipng")) {
-            args = {"-o", "4", "--strip", "all", "-out", output, source};
+            const QString level = normalized == "strong" ? "7" : (normalized == "balanced" ? "6" : "5");
+            args = {"-o", level, "--strip", "all", "-out", output, source};
         } else {
-            args = {"-o7", "-strip", "all", "-out", output, source};
+            const QString level = normalized == "strong" ? "7" : (normalized == "balanced" ? "7" : "6");
+            args = {QString("-o%1").arg(level), "-strip", "all", "-out", output, source};
         }
         const bool ok = runProcess(optimizer, args);
         const qint64 outputSize = QFileInfo(output).size();
@@ -237,7 +299,7 @@ CompressionResult EngineRegistry::compressFile(
     if (suffix == "gif") {
         const QString gifsicle = findTool({"gifsicle"});
         if (gifsicle.isEmpty()) {
-            return copyOriginal(source, output);
+            return missingEngine(source, "gifsicle");
         }
         QStringList args = {"-O3", "--no-comments", "--no-names", "--no-extensions"};
         if (!options.lossless) {
@@ -256,7 +318,7 @@ CompressionResult EngineRegistry::compressFile(
     if (suffix == "webp") {
         const QString cwebp = findTool({"cwebp"});
         if (cwebp.isEmpty()) {
-            return copyOriginal(source, output);
+            return missingEngine(source, "cwebp");
         }
         QStringList args;
         if (options.lossless) {

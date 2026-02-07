@@ -112,5 +112,20 @@ vendor 目录结构：
 - 产物：native/dist/ImgcompressNative.exe 与 native/dist/vendor/
 - windeployqt 会自动部署 Qt 运行库
 
+### Windows 安装程序生成
+- 环境：安装 Inno Setup 6（ISCC 或 Compil32 均可，无需固定路径）
+- 一键生成：
+
+```bash
+python native\installer\windows\build_installer.py
+```
+
+- 输出：native\installer\windows\Imgcompress-Setup.exe
+- 语言：默认显示语言选择页并按系统预选。若需中文安装器界面，将 ChineseSimplified.isl 放在 native\installer\windows\lang\ChineseSimplified.isl；否则回退英文
+- 可选签名：设置 SIGN_CERT_PFX、SIGN_CERT_PWD（可选 SIGN_TSA）后自动为 exe 与安装包签名
+- 常见问题：
+  - 找不到编译器：设置 INNOSETUP_ISCC 指向 ISCC 或 Compil32，或将其加入 PATH
+  - 找不到 dist：先执行 python native/build_windows.py
+
 ## Python 版本（学习用）
 Python 目录仅用于学习与对比实现，不作为发行版。发行与交付以 C++/Qt 原生版为准。

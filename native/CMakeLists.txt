@@ -28,7 +28,7 @@ if(APPLE)
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
     )
 else()
-    add_executable(ImgcompressNative ${APP_SOURCES})
+    add_executable(ImgcompressNative WIN32 ${APP_SOURCES})
 endif()
 
 target_include_directories(ImgcompressNative PRIVATE src)

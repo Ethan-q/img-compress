@@ -670,20 +670,25 @@ QString MainWindow::commonBaseDir(const QStringList &files) const {
     if (files.isEmpty()) {
         return QString();
     }
-    QStringList parts = QDir::fromNativeSeparators(QFileInfo(files.first()).absolutePath()).split('/', Qt::SkipEmptyParts);
-    QString prefix;
     const QString firstPath = QDir::fromNativeSeparators(QFileInfo(files.first()).absolutePath());
-    if (firstPath.contains(":/")) {
+    QStringList parts = firstPath.split('/', Qt::SkipEmptyParts);
+    QString prefix;
+    const bool isDrive = firstPath.contains(":/");
+    const bool isUNC = firstPath.startsWith("//");
+    if (isDrive) {
         if (!parts.isEmpty()) {
             prefix = parts.takeFirst() + ":/";
         }
+    } else if (isUNC) {
+        prefix = "//";
     } else if (firstPath.startsWith("/")) {
         prefix = "/";
     }
     int commonCount = parts.size();
     for (const QString &file : files) {
-        QStringList current = QDir::fromNativeSeparators(QFileInfo(file).absolutePath()).split('/', Qt::SkipEmptyParts);
-        if (firstPath.contains(":/") && !current.isEmpty()) {
+        const QString path = QDir::fromNativeSeparators(QFileInfo(file).absolutePath());
+        QStringList current = path.split('/', Qt::SkipEmptyParts);
+        if (isDrive && !current.isEmpty()) {
             current.takeFirst();
         }
         commonCount = std::min(commonCount, static_cast<int>(current.size()));
@@ -694,11 +699,11 @@ QString MainWindow::commonBaseDir(const QStringList &files) const {
             }
         }
     }
-    const QStringList commonParts = parts.mid(0, commonCount);
-    if (!prefix.isEmpty()) {
-        return prefix + commonParts.join("/");
+    const QString base = (!prefix.isEmpty() ? prefix + parts.mid(0, commonCount).join("/") : parts.mid(0, commonCount).join("/"));
+    if (base.isEmpty() || !QDir(base).exists()) {
+        return QFileInfo(files.first()).absolutePath();
     }
-    return commonParts.join("/");
+    return base;
 }
 
 QString MainWindow::selectedOutputFormat() const {

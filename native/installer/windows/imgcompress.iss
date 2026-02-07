@@ -18,7 +18,15 @@ ShowLanguageDialog=yes
 LanguageDetectionMethod=locale
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+#ifexist "..\lang\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "..\lang\ChineseSimplified.isl"
+#else
+  #ifexist "compiler:Languages\ChineseSimplified.isl"
+  Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+  #else
+  Name: "chinesesimp"; MessagesFile: "compiler:Default.isl"
+  #endif
+#endif
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]

@@ -56,7 +56,7 @@ def load_config(root: Path) -> dict:
         except Exception:
             cfg = {}
     else:
-        f = root / "build_config.json"
+        f = root / "build_config.windows.json"
         if f.exists():
             try:
                 cfg = json.loads(f.read_text(encoding="utf-8"))

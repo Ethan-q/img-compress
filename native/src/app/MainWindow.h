@@ -13,6 +13,7 @@ class QLabel;
 class QPlainTextEdit;
 class QProgressBar;
 class QIntValidator;
+class QSpinBox;
 
 class CompressController;
 class QDragEnterEvent;
@@ -55,6 +56,7 @@ private:
     void setupUi();
     void updateSelectionMode();
     void updateCompressionOptionsState();
+    void updateLogSearchHighlights();
     bool readResizeSize(int &width, int &height);
     void setSelectedFiles(const QStringList &files);
     void updateFileSummary();
@@ -90,6 +92,7 @@ private:
     QLabel *sizeLabel;
     QSlider *qualitySlider;
     QLabel *qualityValue;
+    QComboBox *engineLevelCombo;
     QCheckBox *formatJpg;
     QCheckBox *formatPng;
     QCheckBox *formatGif;
@@ -98,6 +101,7 @@ private:
     QPushButton *filesButton;
     QProgressBar *progressBar;
     QPlainTextEdit *logArea;
+    QLineEdit *logSearchInput;
     CompressController *controller;
     DropArea *dropArea;
     QStringList selectedFiles;

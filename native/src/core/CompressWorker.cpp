@@ -8,8 +8,14 @@
 #include <QImage>
 #include <QImageReader>
 #include <QImageWriter>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSet>
+#include <QThread>
+#include <QThreadPool>
 #include <QTemporaryFile>
+#include <QWaitCondition>
+#include <QQueue>
 
 namespace {
 QString ensureUniquePath(const QString &candidate, const QString &sourcePath, const QString &stem, const QString &suffix) {
@@ -42,6 +48,269 @@ int adjustQuality(int quality, const QString &profile) {
     }
     return quality;
 }
+
+QString normalizeSuffix(const QString &suffix) {
+    if (suffix == "jpeg") {
+        return "jpg";
+    }
+    return suffix;
+}
+
+struct TaskOutcome {
+    QString fileName;
+    CompressionResult result;
+    bool hasResult;
+    QStringList logs;
+};
+
+TaskOutcome compressSingle(
+    const QString &file,
+    const QDir &inputRoot,
+    const QDir &outputRoot,
+    const CompressionOptions &options
+) {
+    TaskOutcome outcome;
+    const QFileInfo sourceInfo(file);
+    outcome.fileName = sourceInfo.fileName();
+    const QString relativePath = inputRoot.relativeFilePath(file);
+    const QFileInfo relativeInfo(relativePath);
+    const QString sourceSuffix = normalizeSuffix(sourceInfo.suffix().toLower());
+    const QByteArray detectedFormat = QImageReader::imageFormat(file);
+    const QString actualSuffix = normalizeSuffix(QString::fromLatin1(detectedFormat).toLower());
+    const bool formatMismatch = !actualSuffix.isEmpty() && actualSuffix != sourceSuffix;
+    const QString effectiveSuffix = actualSuffix.isEmpty() ? sourceSuffix : actualSuffix;
+    if (formatMismatch) {
+        outcome.logs << QString("%1 实际格式为 %2，与扩展名 %3 不一致，将按实际格式输出并压缩")
+                            .arg(sourceInfo.fileName())
+                            .arg(actualSuffix)
+                            .arg(sourceSuffix);
+    }
+    const QString rawOutputFormat = options.outputFormat.toLower();
+    const QString normalizedOutputFormat = normalizeSuffix(rawOutputFormat);
+    const QString targetFormat = rawOutputFormat.isEmpty() || rawOutputFormat == "original"
+        ? effectiveSuffix
+        : normalizedOutputFormat;
+    const QString baseName = sourceInfo.completeBaseName();
+    const QString relativeDir = relativeInfo.path();
+    const QString outputFileName = targetFormat.isEmpty() ? baseName : baseName + "." + targetFormat;
+    QString outputPath = relativeDir == "."
+        ? outputRoot.filePath(outputFileName)
+        : outputRoot.filePath(relativeDir + "/" + outputFileName);
+    outputPath = ensureUniquePath(outputPath, sourceInfo.absoluteFilePath(), baseName, targetFormat);
+    QFileInfo outputInfo(outputPath);
+    QDir outputDirInfo = outputInfo.dir();
+    if (!outputDirInfo.exists()) {
+        outputDirInfo.mkpath(".");
+    }
+    const qint64 sourceSize = sourceInfo.size();
+    outcome.result = {false, sourceSize, sourceSize, "无", "失败"};
+    outcome.hasResult = true;
+    const bool convertToWebp = targetFormat == "webp" && effectiveSuffix != "webp";
+    const bool convertToGif = targetFormat == "gif" && effectiveSuffix != "gif";
+    const bool convertFromWebp = effectiveSuffix == "webp"
+        && (targetFormat == "jpg" || targetFormat == "png");
+    if (convertToGif) {
+        outcome.logs << QString("%1 转换失败：不支持转换为GIF").arg(sourceInfo.fileName());
+        outcome.hasResult = false;
+        return outcome;
+    }
+    if (options.resizeEnabled && (effectiveSuffix == "webp" || targetFormat == "webp")) {
+        outcome.logs << QString("%1 转换失败：启用尺寸裁剪/缩放时不支持 WebP（需要 Qt WebP 插件）").arg(sourceInfo.fileName());
+        outcome.hasResult = false;
+        return outcome;
+    }
+    if ((convertToWebp || convertFromWebp) && !options.resizeEnabled) {
+        outcome.result = EngineRegistry::compressFile(file, outputPath, options);
+        if (!outcome.result.success) {
+            QImageReader reader(file);
+            reader.setAutoTransform(true);
+            if (!actualSuffix.isEmpty()) {
+                reader.setFormat(actualSuffix.toLatin1());
+            }
+            QImage image = reader.read();
+            if (!image.isNull()) {
+                QString tempFormat = !actualSuffix.isEmpty() ? actualSuffix : "png";
+                QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
+                temp.setAutoRemove(true);
+                if (temp.open()) {
+                    const QString tempPath = temp.fileName();
+                    temp.close();
+                    QImageWriter writer(tempPath, tempFormat.toLatin1());
+                    const int quality = options.lossless
+                        ? 100
+                        : qBound(1, adjustQuality(options.quality, options.profile), 100);
+                    writer.setQuality(quality);
+                    if (writer.write(image)) {
+                        outcome.result = EngineRegistry::compressFile(tempPath, outputPath, options);
+                        if (!outcome.result.success) {
+                            QFile::remove(outputPath);
+                            QFile::copy(tempPath, outputPath);
+                            outcome.result = {true, sourceSize, QFileInfo(outputPath).size(), "Qt", "已转换"};
+                        } else {
+                            outcome.result.originalSize = sourceSize;
+                            outcome.result.outputSize = QFileInfo(outputPath).size();
+                        }
+                    } else {
+                        outcome.logs << QString("%1 转换失败：无法写入格式").arg(sourceInfo.fileName());
+                        outcome.hasResult = false;
+                        return outcome;
+                    }
+                } else {
+                    outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
+                    outcome.hasResult = false;
+                    return outcome;
+                }
+            }
+        }
+    } else if (options.resizeEnabled || targetFormat != effectiveSuffix || formatMismatch) {
+        if (!options.resizeEnabled && formatMismatch && targetFormat == effectiveSuffix) {
+            QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + effectiveSuffix));
+            temp.setAutoRemove(true);
+            if (!temp.open()) {
+                outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
+                outcome.hasResult = false;
+                return outcome;
+            }
+            const QString tempPath = temp.fileName();
+            temp.close();
+            QFile::remove(tempPath);
+            if (!QFile::copy(file, tempPath)) {
+                outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
+                outcome.hasResult = false;
+                return outcome;
+            }
+            outcome.result = EngineRegistry::compressFile(tempPath, outputPath, options);
+            if (!outcome.result.success) {
+                QFile::remove(outputPath);
+                QFile::copy(tempPath, outputPath);
+                outcome.result = {true, sourceSize, QFileInfo(outputPath).size(), "原图", "已按实际格式输出"};
+            } else {
+                outcome.result.originalSize = sourceSize;
+                outcome.result.outputSize = QFileInfo(outputPath).size();
+            }
+        } else {
+            QImageReader reader(file);
+            reader.setAutoTransform(true);
+            if (effectiveSuffix == "webp") {
+                reader.setFormat("webp");
+            }
+            QImage image = reader.read();
+            if (image.isNull()) {
+                if (effectiveSuffix == "webp") {
+                    outcome.logs << QString("%1 转换失败：WebP 解码不可用（缺少 dwebp 或 Qt WebP 插件）").arg(sourceInfo.fileName());
+                } else {
+                    outcome.logs << QString("%1 转换失败：无法读取图片").arg(sourceInfo.fileName());
+                }
+                outcome.hasResult = false;
+                return outcome;
+            }
+            if (options.resizeEnabled) {
+                if (options.resizeMode == 2) {
+                    image = image.scaled(
+                        options.targetWidth,
+                        options.targetHeight,
+                        Qt::KeepAspectRatioByExpanding,
+                        Qt::SmoothTransformation
+                    );
+                    const int cropWidth = qMin(options.targetWidth, image.width());
+                    const int cropHeight = qMin(options.targetHeight, image.height());
+                    const int offsetX = qMax(0, (image.width() - cropWidth) / 2);
+                    const int offsetY = qMax(0, (image.height() - cropHeight) / 2);
+                    image = image.copy(QRect(offsetX, offsetY, cropWidth, cropHeight));
+                } else if (options.resizeMode == 1) {
+                    image = image.scaled(
+                        options.targetWidth,
+                        options.targetHeight,
+                        Qt::KeepAspectRatio,
+                        Qt::SmoothTransformation
+                    );
+                }
+            }
+            QString tempFormat = targetFormat;
+            bool allowTempFallback = true;
+            if (convertToWebp || convertToGif) {
+                tempFormat = effectiveSuffix.isEmpty() ? "png" : effectiveSuffix;
+                allowTempFallback = false;
+            }
+            QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
+            temp.setAutoRemove(true);
+            if (!temp.open()) {
+                outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
+                outcome.hasResult = false;
+                return outcome;
+            }
+            const QString tempPath = temp.fileName();
+            temp.close();
+            QImageWriter writer(tempPath, tempFormat.toLatin1());
+            const int quality = options.lossless
+                ? 100
+                : qBound(1, adjustQuality(options.quality, options.profile), 100);
+            writer.setQuality(quality);
+            if (!writer.write(image)) {
+                outcome.logs << QString("%1 转换失败：无法写入格式").arg(sourceInfo.fileName());
+                outcome.hasResult = false;
+                return outcome;
+            }
+            outcome.result = EngineRegistry::compressFile(tempPath, outputPath, options);
+            if (!outcome.result.success && allowTempFallback) {
+                QFile::remove(outputPath);
+                QFile::copy(tempPath, outputPath);
+                outcome.result = {true, sourceSize, QFileInfo(outputPath).size(), "Qt", "已转换"};
+            } else {
+                outcome.result.originalSize = sourceSize;
+                outcome.result.outputSize = QFileInfo(outputPath).size();
+            }
+        }
+    } else {
+        outcome.result = EngineRegistry::compressFile(file, outputPath, options);
+    }
+    if (outcome.result.success && outcome.result.outputSize > outcome.result.originalSize) {
+        QFile::remove(outputPath);
+        QFile::copy(sourceInfo.absoluteFilePath(), outputPath);
+        outcome.result.outputSize = QFileInfo(outputPath).size();
+        outcome.result.engine = "原图";
+        outcome.result.message = "已保留原图";
+    }
+    return outcome;
+}
+
+class CompressTask final : public QRunnable {
+public:
+    CompressTask(
+        const QString &file,
+        const QDir &inputRoot,
+        const QDir &outputRoot,
+        const CompressionOptions &options,
+        QQueue<TaskOutcome> *queue,
+        QMutex *mutex,
+        QWaitCondition *condition
+    )
+        : filePath(file),
+          input(inputRoot),
+          output(outputRoot),
+          opts(options),
+          resultQueue(queue),
+          queueMutex(mutex),
+          queueCondition(condition) {
+        setAutoDelete(true);
+    }
+
+    void run() override {
+        const TaskOutcome outcome = compressSingle(filePath, input, output, opts);
+        QMutexLocker locker(queueMutex);
+        resultQueue->enqueue(outcome);
+        queueCondition->wakeOne();
+    }
+
+private:
+    QString filePath;
+    QDir input;
+    QDir output;
+    CompressionOptions opts;
+    QQueue<TaskOutcome> *resultQueue;
+    QMutex *queueMutex;
+    QWaitCondition *queueCondition;
+};
 }
 
 CompressWorker::CompressWorker(QObject *parent) : QObject(parent), useFileList(false) {}
@@ -111,233 +380,63 @@ void CompressWorker::run() {
     QDir inputRoot(inputDir);
     QDir outputRoot(outputDir);
     int completed = 0;
-    for (const QString &file : workingFiles) {
-        const QFileInfo sourceInfo(file);
-        const QString relativePath = inputRoot.relativeFilePath(file);
-        const QFileInfo relativeInfo(relativePath);
-        const QString sourceSuffix = sourceInfo.suffix().toLower();
-        const QByteArray detectedFormat = QImageReader::imageFormat(file);
-        const QString actualSuffix = QString::fromLatin1(detectedFormat).toLower();
-        const bool formatMismatch = !actualSuffix.isEmpty() && actualSuffix != sourceSuffix;
-        const QString effectiveSuffix = actualSuffix.isEmpty() ? sourceSuffix : actualSuffix;
-        if (formatMismatch) {
-            emit logMessage(
-                QString("%1 实际格式为 %2，与扩展名 %3 不一致，将按实际格式输出并压缩")
-                    .arg(sourceInfo.fileName())
-                    .arg(actualSuffix)
-                    .arg(sourceSuffix)
-            );
-        }
-        const QString targetFormat = options.outputFormat.isEmpty() || options.outputFormat == "original"
-            ? effectiveSuffix
-            : options.outputFormat.toLower();
-        const QString baseName = sourceInfo.completeBaseName();
-        const QString relativeDir = relativeInfo.path();
-        const QString outputFileName = targetFormat.isEmpty() ? baseName : baseName + "." + targetFormat;
-        QString outputPath = relativeDir == "."
-            ? outputRoot.filePath(outputFileName)
-            : outputRoot.filePath(relativeDir + "/" + outputFileName);
-        outputPath = ensureUniquePath(outputPath, sourceInfo.absoluteFilePath(), baseName, targetFormat);
-        QFileInfo outputInfo(outputPath);
-        QDir outputDirInfo = outputInfo.dir();
-        if (!outputDirInfo.exists()) {
-            outputDirInfo.mkpath(".");
-        }
-        const qint64 sourceSize = sourceInfo.size();
-        CompressionResult result{false, sourceSize, sourceSize, "无", "失败"};
-        const bool convertToWebp = targetFormat == "webp" && effectiveSuffix != "webp";
-        const bool convertToGif = targetFormat == "gif" && effectiveSuffix != "gif";
-        const bool convertFromWebp = effectiveSuffix == "webp"
-            && (targetFormat == "jpg" || targetFormat == "jpeg" || targetFormat == "png");
-        if (convertToGif) {
-            emit logMessage(QString("%1 转换失败：不支持转换为GIF").arg(sourceInfo.fileName()));
-            completed += 1;
-            emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
-            continue;
-        }
-        if (options.resizeEnabled && (effectiveSuffix == "webp" || targetFormat == "webp")) {
-            emit logMessage(QString("%1 转换失败：启用尺寸裁剪/缩放时不支持 WebP（需要 Qt WebP 插件）").arg(sourceInfo.fileName()));
-            completed += 1;
-            emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
-            continue;
-        }
-        if ((convertToWebp || convertFromWebp) && !options.resizeEnabled) {
-            result = EngineRegistry::compressFile(file, outputPath, options);
-            if (!result.success) {
-                QImageReader reader(file);
-                reader.setAutoTransform(true);
-                if (!actualSuffix.isEmpty()) {
-                    reader.setFormat(actualSuffix.toLatin1());
-                }
-                QImage image = reader.read();
-                if (!image.isNull()) {
-                    QString tempFormat = !actualSuffix.isEmpty() ? actualSuffix : "png";
-                    QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
-                    temp.setAutoRemove(true);
-                    if (temp.open()) {
-                        const QString tempPath = temp.fileName();
-                        temp.close();
-                        QImageWriter writer(tempPath, tempFormat.toLatin1());
-                        const int quality = options.lossless
-                            ? 100
-                            : qBound(1, adjustQuality(options.quality, options.profile), 100);
-                        writer.setQuality(quality);
-                        if (writer.write(image)) {
-                            result = EngineRegistry::compressFile(tempPath, outputPath, options);
-                            if (!result.success) {
-                                QFile::remove(outputPath);
-                                QFile::copy(tempPath, outputPath);
-                                result = {true, sourceSize, QFileInfo(outputPath).size(), "Qt", "已转换"};
-                            } else {
-                                result.originalSize = sourceSize;
-                                result.outputSize = QFileInfo(outputPath).size();
-                            }
-                        } else {
-                            emit logMessage(QString("%1 转换失败：无法写入格式").arg(sourceInfo.fileName()));
-                        }
-                    } else {
-                        emit logMessage(QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName()));
-                    }
-                }
-            }
-        } else if (options.resizeEnabled || targetFormat != effectiveSuffix || formatMismatch) {
-            if (!options.resizeEnabled && formatMismatch && targetFormat == effectiveSuffix) {
-                QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + effectiveSuffix));
-                temp.setAutoRemove(true);
-                if (!temp.open()) {
-                    emit logMessage(QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName()));
-                    completed += 1;
-                    emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
-                    continue;
-                }
-                const QString tempPath = temp.fileName();
-                temp.close();
-                QFile::remove(tempPath);
-                if (!QFile::copy(file, tempPath)) {
-                    emit logMessage(QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName()));
-                    completed += 1;
-                    emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
-                    continue;
-                }
-                result = EngineRegistry::compressFile(tempPath, outputPath, options);
-                if (!result.success) {
-                    QFile::remove(outputPath);
-                    QFile::copy(tempPath, outputPath);
-                    result = {true, sourceSize, QFileInfo(outputPath).size(), "原图", "已按实际格式输出"};
-                } else {
-                    result.originalSize = sourceSize;
-                    result.outputSize = QFileInfo(outputPath).size();
-                }
-            } else {
-            QImageReader reader(file);
-            reader.setAutoTransform(true);
-            if (effectiveSuffix == "webp") {
-                reader.setFormat("webp");
-            }
-            QImage image = reader.read();
-            if (image.isNull()) {
-                if (effectiveSuffix == "webp") {
-                    emit logMessage(QString("%1 转换失败：WebP 解码不可用（缺少 dwebp 或 Qt WebP 插件）").arg(sourceInfo.fileName()));
-                } else {
-                    emit logMessage(QString("%1 转换失败：无法读取图片").arg(sourceInfo.fileName()));
-                }
-                completed += 1;
-                emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
-                continue;
-            }
-            if (options.resizeEnabled) {
-                if (options.resizeMode == 2) {
-                    image = image.scaled(
-                        options.targetWidth,
-                        options.targetHeight,
-                        Qt::KeepAspectRatioByExpanding,
-                        Qt::SmoothTransformation
-                    );
-                    const int cropWidth = qMin(options.targetWidth, image.width());
-                    const int cropHeight = qMin(options.targetHeight, image.height());
-                    const int offsetX = qMax(0, (image.width() - cropWidth) / 2);
-                    const int offsetY = qMax(0, (image.height() - cropHeight) / 2);
-                    image = image.copy(QRect(offsetX, offsetY, cropWidth, cropHeight));
-                } else if (options.resizeMode == 1) {
-                    image = image.scaled(
-                        options.targetWidth,
-                        options.targetHeight,
-                        Qt::KeepAspectRatio,
-                        Qt::SmoothTransformation
-                    );
-                }
-            }
-            QString tempFormat = targetFormat;
-            bool allowTempFallback = true;
-            if (convertToWebp || convertToGif) {
-                tempFormat = effectiveSuffix.isEmpty() ? "png" : effectiveSuffix;
-                allowTempFallback = false;
-            }
-            QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
-            temp.setAutoRemove(true);
-            if (!temp.open()) {
-                emit logMessage(QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName()));
-                completed += 1;
-                emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
-                continue;
-            }
-            const QString tempPath = temp.fileName();
-            temp.close();
-            QImageWriter writer(tempPath, tempFormat.toLatin1());
-            const int quality = options.lossless
-                ? 100
-                : qBound(1, adjustQuality(options.quality, options.profile), 100);
-            writer.setQuality(quality);
-            if (!writer.write(image)) {
-                emit logMessage(QString("%1 转换失败：无法写入格式").arg(sourceInfo.fileName()));
-                completed += 1;
-                emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
-                continue;
-            }
-            result = EngineRegistry::compressFile(tempPath, outputPath, options);
-            if (!result.success && allowTempFallback) {
-                QFile::remove(outputPath);
-                QFile::copy(tempPath, outputPath);
-                result = {true, sourceSize, QFileInfo(outputPath).size(), "Qt", "已转换"};
-            } else {
-                result.originalSize = sourceSize;
-                result.outputSize = QFileInfo(outputPath).size();
-            }
-            }
-        } else {
-            result = EngineRegistry::compressFile(file, outputPath, options);
-        }
-        if (result.success) {
-            if (result.outputSize > result.originalSize) {
-                QFile::remove(outputPath);
-                QFile::copy(sourceInfo.absoluteFilePath(), outputPath);
-                result.outputSize = QFileInfo(outputPath).size();
-                result.engine = "原图";
-                result.message = "已保留原图";
-            }
-            successCount += 1;
-            totalBefore += result.originalSize;
-            totalAfter += result.outputSize;
-            const double ratio = result.originalSize > 0
-                ? 1.0 - (static_cast<double>(result.outputSize) / result.originalSize)
-                : 0.0;
-            emit logMessage(
-                QString("%1 压缩完成，节省 %2，引擎 %3")
-                    .arg(QFileInfo(file).fileName())
-                    .arg(QString::number(ratio * 100.0, 'f', 1) + "%")
-                    .arg(result.engine)
-            );
-        } else {
-            emit logMessage(
-                QString("%1 压缩失败：%2")
-                    .arg(QFileInfo(file).fileName())
-                    .arg(result.message)
-            );
-        }
-        completed += 1;
-        const int percent = static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0);
-        emit progressChanged(percent);
+    QThreadPool pool;
+    int concurrency = options.concurrency;
+    if (concurrency < 1) {
+        const int ideal = QThread::idealThreadCount();
+        concurrency = ideal > 1 ? ideal - 1 : 1;
     }
+    pool.setMaxThreadCount(concurrency);
+    QQueue<TaskOutcome> outcomes;
+    QMutex queueMutex;
+    QWaitCondition queueCondition;
+    for (const QString &file : workingFiles) {
+        pool.start(new CompressTask(file, inputRoot, outputRoot, options, &outcomes, &queueMutex, &queueCondition));
+    }
+    const int total = workingFiles.size();
+    while (completed < total) {
+        queueMutex.lock();
+        if (outcomes.isEmpty()) {
+            queueCondition.wait(&queueMutex);
+        }
+        QQueue<TaskOutcome> batch;
+        while (!outcomes.isEmpty()) {
+            batch.enqueue(outcomes.dequeue());
+        }
+        queueMutex.unlock();
+        while (!batch.isEmpty()) {
+            const TaskOutcome outcome = batch.dequeue();
+            for (const QString &line : outcome.logs) {
+                emit logMessage(line);
+            }
+            if (outcome.hasResult) {
+                if (outcome.result.success) {
+                    successCount += 1;
+                    totalBefore += outcome.result.originalSize;
+                    totalAfter += outcome.result.outputSize;
+                    const double ratio = outcome.result.originalSize > 0
+                        ? 1.0 - (static_cast<double>(outcome.result.outputSize) / outcome.result.originalSize)
+                        : 0.0;
+                    emit logMessage(
+                        QString("%1 压缩完成，节省 %2，引擎 %3")
+                            .arg(outcome.fileName)
+                            .arg(QString::number(ratio * 100.0, 'f', 1) + "%")
+                            .arg(outcome.result.engine)
+                    );
+                } else {
+                    emit logMessage(
+                        QString("%1 压缩失败：%2")
+                            .arg(outcome.fileName)
+                            .arg(outcome.result.message)
+                    );
+                }
+            }
+            completed += 1;
+            const int percent = static_cast<int>((static_cast<double>(completed) / total) * 100.0);
+            emit progressChanged(percent);
+        }
+    }
+    pool.waitForDone();
     const qint64 saved = totalBefore - totalAfter;
     const double totalRatio = totalBefore > 0
         ? static_cast<double>(saved) / totalBefore

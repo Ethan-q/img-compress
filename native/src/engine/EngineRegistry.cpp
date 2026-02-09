@@ -525,10 +525,17 @@ CompressionResult EngineRegistry::compressFile(
         const auto res = runProcessWithCode(cwebp, args);
         const bool ok = res.first == 0;
         const qint64 outputSize = QFileInfo(output).size();
-        if (!ok && isSameFormat(outputFormat, suffix) && isCorruptedInput(res.second)) {
-            return keepOriginal(source, output, "源文件异常，已保留原图");
+        if (!ok) {
+            const QString tail = res.second.trimmed();
+            const bool noOutput = !QFileInfo::exists(output);
+            if (isSameFormat(outputFormat, suffix) && (isCorruptedInput(tail) || noOutput)) {
+                const QString msg = tail.isEmpty() ? "cwebp 失败，已保留原图" : QString("cwebp 失败，已保留原图：%1").arg(tail);
+                return keepOriginal(source, output, msg);
+            }
+            const QString msg = tail.isEmpty() ? "失败" : tail;
+            return {false, originalSize, outputSize, "cwebp", msg};
         }
-        return {ok, originalSize, outputSize, "cwebp", ok ? "成功" : "失败"};
+        return {true, originalSize, outputSize, "cwebp", "成功"};
     }
     return {false, originalSize, originalSize, "无", "不支持的格式"};
 }

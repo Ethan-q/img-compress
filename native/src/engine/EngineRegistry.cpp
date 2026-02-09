@@ -234,10 +234,6 @@ QStringList EngineRegistry::availableEngines() {
     return {"jpegtran", "mozjpeg", "pngquant", "oxipng", "optipng", "gifsicle", "cwebp", "dwebp"};
 }
 
-bool EngineRegistry::toolExists(const QString &name) {
-    return !findTool({name}).isEmpty();
-}
-
 QString EngineRegistry::engineStatus(bool lossless) {
     const QString jpegtran = findTool({"jpegtran"});
     const QString cjpeg = findTool({"cjpeg", "mozjpeg"});

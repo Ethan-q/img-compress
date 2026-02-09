@@ -26,7 +26,6 @@
 #include <QProgressBar>
 #include <QSizePolicy>
 #include <QSlider>
-#include <QStandardItemModel>
 #include <QSet>
 #include <QTextCharFormat>
 #include <QTextCursor>
@@ -39,7 +38,6 @@
 #include <algorithm>
 
 #include "core/CompressController.h"
-#include "engine/EngineRegistry.h"
 
 DropArea::DropArea(QWidget *parent) : QFrame(parent) {
     setAcceptDrops(true);
@@ -415,18 +413,6 @@ void MainWindow::setupUi() {
     formatLayout->addWidget(formatGif);
     formatLayout->addWidget(formatWebp);
     optionsLayout->addRow("输入格式", formatLayout);
-    connect(formatJpg, &QCheckBox::toggled, this, [this]() {
-        updateCompressionOptionsState();
-    });
-    connect(formatPng, &QCheckBox::toggled, this, [this]() {
-        updateCompressionOptionsState();
-    });
-    connect(formatGif, &QCheckBox::toggled, this, [this]() {
-        updateCompressionOptionsState();
-    });
-    connect(formatWebp, &QCheckBox::toggled, this, [this]() {
-        updateCompressionOptionsState();
-    });
 
     outputFormatCombo = new QComboBox(this);
     outputFormatCombo->addItem("保持原格式", "original");
@@ -438,9 +424,6 @@ void MainWindow::setupUi() {
     outputFormatCombo->setView(new QListView(outputFormatCombo));
     outputFormatCombo->view()->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     optionsLayout->addRow("输出格式", outputFormatCombo);
-    connect(outputFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
-        updateOutputFormatOptions();
-    });
 
     auto *resizeLayout = new QHBoxLayout();
     resizeModeCombo = new QComboBox(this);
@@ -545,8 +528,6 @@ void MainWindow::pickInputDir() {
         inputLine->setText(dir);
     }
     updateSelectionMode();
-    updateCompressionOptionsState();
-    updateOutputFormatOptions();
 }
 
 void MainWindow::pickOutputDir() {
@@ -964,7 +945,6 @@ void MainWindow::updateCompressionOptionsState() {
             heightInput->clear();
         }
     }
-    updateOutputFormatOptions();
 }
 
 bool MainWindow::readResizeSize(int &width, int &height) {
@@ -979,88 +959,4 @@ bool MainWindow::readResizeSize(int &width, int &height) {
     width = parsedWidth;
     height = parsedHeight;
     return true;
-}
-
-void MainWindow::setOutputFormatEnabled(const QString &format, bool enabled) {
-    int index = 0;
-    if (format == "original") {
-        index = 0;
-    } else if (format == "jpg") {
-        index = 1;
-    } else if (format == "png") {
-        index = 2;
-    } else if (format == "webp") {
-        index = 3;
-    } else if (format == "gif") {
-        index = 4;
-    }
-    auto *model = qobject_cast<QStandardItemModel *>(outputFormatCombo->model());
-    if (model && index >= 0 && index < model->rowCount()) {
-        QStandardItem *item = model->item(index);
-        if (item) {
-            item->setEnabled(enabled);
-        }
-    }
-}
-
-bool MainWindow::isOutputFormatEnabled(int index) const {
-    auto *model = qobject_cast<QStandardItemModel *>(outputFormatCombo->model());
-    if (model && index >= 0 && index < model->rowCount()) {
-        QStandardItem *item = model->item(index);
-        if (item) {
-            return item->isEnabled();
-        }
-    }
-    return true;
-}
-
-void MainWindow::updateOutputFormatOptions() {
-    const bool lossless = losslessCheck->isChecked();
-    if (lossless) {
-        setOutputFormatEnabled("original", true);
-        setOutputFormatEnabled("jpg", true);
-        setOutputFormatEnabled("png", true);
-        setOutputFormatEnabled("webp", false);
-        setOutputFormatEnabled("gif", false);
-        if (!isOutputFormatEnabled(outputFormatCombo->currentIndex())) {
-            outputFormatCombo->setCurrentIndex(0);
-        }
-        return;
-    }
-    const int resizeMode = resizeModeCombo->currentData().toInt();
-    const bool resizeEnabled = resizeMode != 0;
-    const bool hasGif = formatGif->isChecked();
-    const bool hasWebpInput = formatWebp->isChecked();
-    const bool onlyGif = hasGif
-        && !formatJpg->isChecked()
-        && !formatPng->isChecked()
-        && !formatWebp->isChecked();
-    const bool hasCwebp = EngineRegistry::toolExists("cwebp");
-    const bool hasDwebp = EngineRegistry::toolExists("dwebp");
-    const bool hasMozjpeg = EngineRegistry::toolExists("cjpeg") || EngineRegistry::toolExists("mozjpeg");
-    bool allowJpg = true;
-    bool allowPng = true;
-    bool allowWebp = hasCwebp && !resizeEnabled;
-    const bool allowGif = onlyGif;
-    if (hasGif) {
-        allowJpg = false;
-        allowPng = false;
-        allowWebp = false;
-    }
-    if (hasWebpInput) {
-        if (!hasDwebp) {
-            allowJpg = false;
-            allowPng = false;
-        } else if (!hasMozjpeg) {
-            allowJpg = false;
-        }
-    }
-    setOutputFormatEnabled("original", true);
-    setOutputFormatEnabled("jpg", allowJpg);
-    setOutputFormatEnabled("png", allowPng);
-    setOutputFormatEnabled("webp", allowWebp);
-    setOutputFormatEnabled("gif", allowGif);
-    if (!isOutputFormatEnabled(outputFormatCombo->currentIndex())) {
-        outputFormatCombo->setCurrentIndex(0);
-    }
 }

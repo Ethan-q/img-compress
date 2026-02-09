@@ -56,9 +56,6 @@ private:
     void setupUi();
     void updateSelectionMode();
     void updateCompressionOptionsState();
-    void updateOutputFormatOptions();
-    void setOutputFormatEnabled(const QString &format, bool enabled);
-    bool isOutputFormatEnabled(int index) const;
     void updateLogSearchHighlights();
     bool readResizeSize(int &width, int &height);
     void setSelectedFiles(const QStringList &files);

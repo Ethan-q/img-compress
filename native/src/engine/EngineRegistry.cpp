@@ -472,40 +472,30 @@ CompressionResult EngineRegistry::compressFile(
                 }
             }
         }
-        QString optimizer;
-        if (options.lossless) {
-            optimizer = findTool({"oxipng"});
-            if (optimizer.isEmpty()) {
-                return missingEngine(source, "oxipng");
-            }
-        } else {
-            optimizer = findTool({"oxipng", "optipng"});
-            if (optimizer.isEmpty()) {
-                return missingEngine(source, "oxipng/optipng");
-            }
+        if (!options.lossless) {
+            return {false, originalSize, originalSize, "pngquant", "pngquant 无收益，已保留原图"};
+        }
+        QString optimizer = findTool({"oxipng"});
+        if (optimizer.isEmpty()) {
+            return missingEngine(source, "oxipng");
         }
         QStringList args;
         const QString normalized = normalizeProfile(options.profile);
-        if (optimizer.contains("oxipng")) {
-            const QString level = normalized == "strong" ? "6" : (normalized == "balanced" ? "5" : "4");
-            args = {"-o", level, "--strip", "all", "--out", output, source};
-        } else {
-            const QString level = normalized == "strong" ? "6" : (normalized == "balanced" ? "6" : "5");
-            args = {QString("-o%1").arg(level), "-strip", "all", "-out", output, source};
-        }
+        const QString level = normalized == "strong" ? "4" : (normalized == "balanced" ? "3" : "2");
+        args = {"-o", level, "--strip", "all", "--out", output, source};
         const auto res = runProcessWithCode(optimizer, args);
         const bool ok = res.first == 0;
         const qint64 outputSize = QFileInfo(output).size();
         if (res.first == -2) {
             if (isSameFormat(outputFormat, suffix)) {
-                return keepOriginal(source, output, QString("%1 超时，已保留原图").arg(optimizer.contains("oxipng") ? "oxipng" : "optipng"));
+                return keepOriginal(source, output, "oxipng 超时，已保留原图");
             }
-            return {false, originalSize, outputSize, optimizer.contains("oxipng") ? "oxipng" : "optipng", "执行超时"};
+            return {false, originalSize, outputSize, "oxipng", "执行超时"};
         }
         if (!ok && isSameFormat(outputFormat, suffix) && isCorruptedInput(res.second)) {
             return keepOriginal(source, output, "源文件异常，已保留原图");
         }
-        return {ok, originalSize, outputSize, optimizer.contains("oxipng") ? "oxipng" : "optipng", ok ? "成功" : "失败"};
+        return {ok, originalSize, outputSize, "oxipng", ok ? "成功" : "失败"};
     }
     if (suffix == "gif") {
         const QString gifsicle = findTool({"gifsicle"});

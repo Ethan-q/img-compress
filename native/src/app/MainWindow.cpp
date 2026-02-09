@@ -54,16 +54,17 @@ DropArea::DropArea(QWidget *parent) : QFrame(parent) {
     ));
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(16, 24, 16, 24);
-    layout->setSpacing(0);
+    layout->setSpacing(4);
+    layout->addStretch();
     auto *title = new QLabel("拖拽图片/文件夹到此处开始压缩（输出同目录）", this);
     title->setAlignment(Qt::AlignCenter);
     title->setStyleSheet("color: #111827; font-size: 15px; font-weight: 600;");
     layout->addWidget(title);
-    layout->addSpacing(8);
     auto *hint = new QLabel("支持：JPG / PNG / GIF / WebP", this);
     hint->setAlignment(Qt::AlignCenter);
     hint->setStyleSheet("color: #9ca3af; font-size: 12px; font-weight: 500;");
     layout->addWidget(hint);
+    layout->addStretch();
 }
 
 void DropArea::dragEnterEvent(QDragEnterEvent *event) {

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QAbstractItemView>
+#include <QBrush>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QColor>
@@ -26,6 +27,7 @@
 #include <QProgressBar>
 #include <QSizePolicy>
 #include <QSlider>
+#include <QStandardItemModel>
 #include <QSet>
 #include <QTextCharFormat>
 #include <QTextCursor>
@@ -38,24 +40,31 @@
 #include <algorithm>
 
 #include "core/CompressController.h"
+#include "engine/EngineRegistry.h"
 
 DropArea::DropArea(QWidget *parent) : QFrame(parent) {
     setAcceptDrops(true);
     setMinimumHeight(240);
     setStyleSheet(QStringLiteral(
         "QFrame {"
-        " border: 1px dashed #cbd5f5;"
+        " border: none;"
         " border-radius: 14px;"
         " background: #ffffff;"
         "}"
     ));
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(16, 24, 16, 24);
-    layout->setSpacing(0);
+    layout->setSpacing(4);
+    layout->addStretch();
     auto *title = new QLabel("拖拽图片/文件夹到此处开始压缩（输出同目录）", this);
     title->setAlignment(Qt::AlignCenter);
     title->setStyleSheet("color: #111827; font-size: 15px; font-weight: 600;");
     layout->addWidget(title);
+    auto *hint = new QLabel("支持：JPG / PNG / GIF / WebP", this);
+    hint->setAlignment(Qt::AlignCenter);
+    hint->setStyleSheet("color: #9ca3af; font-size: 12px; font-weight: 500;");
+    layout->addWidget(hint);
+    layout->addStretch();
 }
 
 void DropArea::dragEnterEvent(QDragEnterEvent *event) {
@@ -63,9 +72,9 @@ void DropArea::dragEnterEvent(QDragEnterEvent *event) {
         event->acceptProposedAction();
         setStyleSheet(QStringLiteral(
             "QFrame {"
-        " border: 1px dashed #3b82f6;"
+            " border: none;"
             " border-radius: 14px;"
-            " background: #eff6ff;"
+            " background: #f8fafc;"
             "}"
         ));
         return;
@@ -77,7 +86,7 @@ void DropArea::dragLeaveEvent(QDragLeaveEvent *event) {
     QFrame::dragLeaveEvent(event);
     setStyleSheet(QStringLiteral(
         "QFrame {"
-        " border: 1px dashed #cbd5f5;"
+        " border: none;"
         " border-radius: 14px;"
         " background: #ffffff;"
         "}"
@@ -102,7 +111,7 @@ void DropArea::dropEvent(QDropEvent *event) {
     }
     setStyleSheet(QStringLiteral(
         "QFrame {"
-        " border: 1px dashed #cbd5f5;"
+        " border: none;"
         " border-radius: 14px;"
         " background: #ffffff;"
         "}"
@@ -149,7 +158,7 @@ void MainWindow::setupUi() {
         "}"
         "QFrame#card, QPlainTextEdit#card {"
         " background: #ffffff;"
-        " border: 1px solid #e5e7eb;"
+        " border: none;"
         " border-radius: 16px;"
         "}"
         "QPlainTextEdit#card {"
@@ -188,6 +197,9 @@ void MainWindow::setupUi() {
         "QComboBox QAbstractItemView::item:hover {"
         " background: #eff6ff;"
         " color: #111827;"
+        "}"
+        "QComboBox QAbstractItemView::item:disabled {"
+        " color: #9ca3af;"
         "}"
         "QScrollBar:vertical {"
         " width: 8px;"
@@ -310,6 +322,7 @@ void MainWindow::setupUi() {
             setSelectedFiles(QStringList());
         }
         updateSelectionMode();
+        updateInputFormatsFromSelection();
     });
     auto *inputButton = new QPushButton("选择输入目录", this);
     inputButton->setFixedWidth(130);
@@ -399,21 +412,6 @@ void MainWindow::setupUi() {
     engineLevelCombo->setCurrentIndex(maxThreads - 1);
     engineLevelCombo->setFixedWidth(72);
 
-    auto *formatLayout = new QHBoxLayout();
-    formatJpg = new QCheckBox("JPG", this);
-    formatPng = new QCheckBox("PNG", this);
-    formatGif = new QCheckBox("GIF", this);
-    formatWebp = new QCheckBox("WebP", this);
-    formatJpg->setChecked(true);
-    formatPng->setChecked(true);
-    formatGif->setChecked(true);
-    formatWebp->setChecked(true);
-    formatLayout->addWidget(formatJpg);
-    formatLayout->addWidget(formatPng);
-    formatLayout->addWidget(formatGif);
-    formatLayout->addWidget(formatWebp);
-    optionsLayout->addRow("输入格式", formatLayout);
-
     outputFormatCombo = new QComboBox(this);
     outputFormatCombo->addItem("保持原格式", "original");
     outputFormatCombo->addItem("JPG", "jpg");
@@ -424,6 +422,9 @@ void MainWindow::setupUi() {
     outputFormatCombo->setView(new QListView(outputFormatCombo));
     outputFormatCombo->view()->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     optionsLayout->addRow("输出格式", outputFormatCombo);
+    connect(outputFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
+        updateOutputFormatOptions();
+    });
 
     auto *resizeLayout = new QHBoxLayout();
     resizeModeCombo = new QComboBox(this);
@@ -449,6 +450,7 @@ void MainWindow::setupUi() {
     heightInput->setEnabled(false);
     connect(resizeModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
         updateCompressionOptionsState();
+        updateOutputFormatOptions();
     });
     sizeLabel = new QLabel("×", this);
     sizeLabel->setAlignment(Qt::AlignCenter);
@@ -471,6 +473,7 @@ void MainWindow::setupUi() {
 
     connect(losslessCheck, &QCheckBox::toggled, this, [this]() {
         updateCompressionOptionsState();
+        updateOutputFormatOptions();
     });
 
     auto *actionLayout = new QHBoxLayout();
@@ -519,6 +522,7 @@ void MainWindow::setupUi() {
     central->setLayout(rootLayout);
     setCentralWidget(central);
     updateCompressionOptionsState();
+    updateOutputFormatOptions();
 }
 
 void MainWindow::pickInputDir() {
@@ -528,6 +532,7 @@ void MainWindow::pickInputDir() {
         inputLine->setText(dir);
     }
     updateSelectionMode();
+    updateInputFormatsFromSelection();
 }
 
 void MainWindow::pickOutputDir() {
@@ -547,23 +552,27 @@ void MainWindow::pickFiles() {
         setSelectedFiles(files);
     }
     updateSelectionMode();
+    updateInputFormatsFromSelection();
 }
 
 void MainWindow::clearSelectedFiles() {
     setSelectedFiles(QStringList());
     updateSelectionMode();
+    updateInputFormatsFromSelection();
 }
 
 void MainWindow::startCompression() {
     if (!startButton->isEnabled() || isRunning) {
         return;
     }
-    const QStringList formats = selectedInputFormats();
-    if (formats.isEmpty()) {
-        onLogMessage("请选择至少一种格式");
-        return;
-    }
     if (!selectedFiles.isEmpty()) {
+        inputFormats = collectInputFormatsFromFiles(selectedFiles);
+        updateOutputFormatOptions();
+        const QStringList formats = buildFormatsForWorker();
+        if (formats.isEmpty()) {
+            onLogMessage("未找到可压缩图片");
+            return;
+        }
         const QString baseDir = commonBaseDir(selectedFiles);
         QString outputDir = outputLine->text().trimmed();
         if (baseDir.isEmpty() || !QDir(baseDir).exists()) {
@@ -587,6 +596,13 @@ void MainWindow::startCompression() {
         }
         if (!QDir(inputDir).exists()) {
             onLogMessage("请输入有效的输入目录");
+            return;
+        }
+        inputFormats = collectInputFormatsFromDir(inputDir);
+        updateOutputFormatOptions();
+        const QStringList formats = buildFormatsForWorker();
+        if (formats.isEmpty()) {
+            onLogMessage("未找到可压缩图片");
             return;
         }
         if (outputDir.isEmpty()) {
@@ -636,19 +652,27 @@ void MainWindow::onDropPaths(const QStringList &paths) {
     if (paths.isEmpty()) {
         return;
     }
+    logUnsupportedFiles(collectUnsupportedFilesFromPaths(paths));
     const QStringList files = collectFilesFromPaths(paths);
     if (!files.isEmpty()) {
-        outputLine->clear();
         inputLine->clear();
         setSelectedFiles(files);
-        QStringList formats = selectedInputFormats();
+        inputFormats = collectInputFormatsFromFiles(files);
+        updateOutputFormatOptions();
+        outputFormatCombo->setCurrentIndex(0);
+        const QStringList formats = buildFormatsForWorker();
         if (formats.isEmpty()) {
-            formats = defaultInputFormats();
+            onLogMessage("未找到可压缩图片");
+            return;
         }
         const QString baseDir = commonBaseDir(files);
+        QString outputDir = outputLine->text().trimmed();
+        if (outputDir.isEmpty()) {
+            outputDir = baseDir;
+        }
         logArea->clear();
         updateLogSearchHighlights();
-        if (startFilesCompression(files, baseDir, baseDir, formats)) {
+        if (startFilesCompression(files, baseDir, outputDir, formats)) {
             isRunning = true;
             startButton->setEnabled(false);
             progressBar->setValue(0);
@@ -661,6 +685,7 @@ void MainWindow::onDropPaths(const QStringList &paths) {
             clearSelectedFiles();
             inputLine->setText(info.absoluteFilePath());
             updateSelectionMode();
+            updateInputFormatsFromSelection();
             return;
         }
     }
@@ -705,6 +730,7 @@ void MainWindow::setSelectedFiles(const QStringList &files) {
         inputLine->clear();
     }
     updateSelectionMode();
+    updateInputFormatsFromSelection();
 }
 
 void MainWindow::updateFileSummary() {
@@ -738,6 +764,63 @@ QStringList MainWindow::collectFilesFromPaths(const QStringList &paths) const {
         }
     }
     return QStringList(found.begin(), found.end());
+}
+
+static bool isSupportedImageSuffix(const QString &suffix) {
+    return suffix == "jpg" || suffix == "jpeg" || suffix == "png" || suffix == "gif" || suffix == "webp";
+}
+
+static bool isKnownImageSuffix(const QString &suffix) {
+    return isSupportedImageSuffix(suffix)
+        || suffix == "bmp"
+        || suffix == "tif"
+        || suffix == "tiff"
+        || suffix == "heic"
+        || suffix == "heif"
+        || suffix == "avif"
+        || suffix == "svg";
+}
+
+QStringList MainWindow::collectUnsupportedFilesFromPaths(const QStringList &paths) const {
+    const QStringList filters = {"*.bmp", "*.tif", "*.tiff", "*.heic", "*.heif", "*.avif", "*.svg"};
+    QSet<QString> found;
+    for (const QString &path : paths) {
+        QFileInfo info(path);
+        if (!info.exists()) {
+            continue;
+        }
+        if (info.isFile()) {
+            const QString suffix = info.suffix().toLower();
+            if (!suffix.isEmpty() && isKnownImageSuffix(suffix) && !isSupportedImageSuffix(suffix)) {
+                found.insert(info.absoluteFilePath());
+            }
+            continue;
+        }
+        if (info.isDir()) {
+            QDirIterator it(info.absoluteFilePath(), filters, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                found.insert(it.next());
+            }
+        }
+    }
+    return QStringList(found.begin(), found.end());
+}
+
+void MainWindow::logUnsupportedFiles(const QStringList &files) {
+    if (files.isEmpty()) {
+        return;
+    }
+    QSet<QString> exts;
+    for (const QString &file : files) {
+        const QString suffix = QFileInfo(file).suffix().toLower();
+        if (!suffix.isEmpty()) {
+            exts.insert(suffix.toUpper());
+        }
+    }
+    QStringList list = exts.values();
+    list.sort();
+    const QString formats = list.isEmpty() ? "未知" : list.join(" / ");
+    onLogMessage(QString("发现不支持的格式：%1，已跳过 %2 个文件").arg(formats).arg(files.size()));
 }
 
 QString MainWindow::commonBaseDir(const QStringList &files) const {
@@ -803,27 +886,6 @@ QStringList MainWindow::openFilesDialog(const QString &title) {
         QDir::homePath(),
         "Images (*.jpg *.jpeg *.png *.gif *.webp)"
     );
-}
-
-QStringList MainWindow::selectedInputFormats() const {
-    QStringList formats;
-    if (formatJpg->isChecked()) {
-        formats << "jpg" << "jpeg";
-    }
-    if (formatPng->isChecked()) {
-        formats << "png";
-    }
-    if (formatGif->isChecked()) {
-        formats << "gif";
-    }
-    if (formatWebp->isChecked()) {
-        formats << "webp";
-    }
-    return formats;
-}
-
-QStringList MainWindow::defaultInputFormats() const {
-    return {"jpg", "jpeg", "png", "gif", "webp"};
 }
 
 bool MainWindow::startDirCompression(
@@ -916,14 +978,10 @@ bool MainWindow::startFilesCompression(
 
 void MainWindow::updateCompressionOptionsState() {
     const bool lossless = losslessCheck->isChecked();
-    formatJpg->setEnabled(!lossless);
-    formatPng->setEnabled(!lossless);
-    formatGif->setEnabled(!lossless);
-    formatWebp->setEnabled(!lossless);
     profileCombo->setEnabled(!lossless);
     qualitySlider->setEnabled(!lossless);
     qualityValue->setEnabled(!lossless);
-    outputFormatCombo->setEnabled(!lossless);
+    outputFormatCombo->setEnabled(true);
     if (lossless) {
         widthInput->setEnabled(false);
         heightInput->setEnabled(false);
@@ -944,6 +1002,127 @@ void MainWindow::updateCompressionOptionsState() {
             widthInput->clear();
             heightInput->clear();
         }
+    }
+    updateOutputFormatOptions();
+}
+
+void MainWindow::updateInputFormatsFromSelection() {
+    if (!selectedFiles.isEmpty()) {
+        inputFormats = collectInputFormatsFromFiles(selectedFiles);
+    } else {
+        const QString dir = inputLine->text().trimmed();
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            inputFormats = collectInputFormatsFromDir(dir);
+        } else {
+            inputFormats.clear();
+        }
+    }
+    updateOutputFormatOptions();
+}
+
+QSet<QString> MainWindow::collectInputFormatsFromFiles(const QStringList &files) const {
+    QSet<QString> fmts;
+    for (const QString &f : files) {
+        const QString suf = QFileInfo(f).suffix().toLower();
+        if (suf == "jpg" || suf == "jpeg") {
+            fmts.insert("jpg");
+        } else if (suf == "png" || suf == "gif" || suf == "webp") {
+            fmts.insert(suf);
+        }
+    }
+    return fmts;
+}
+
+QSet<QString> MainWindow::collectInputFormatsFromDir(const QString &dir) const {
+    QSet<QString> fmts;
+    const QStringList filters = {"*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp"};
+    QDirIterator it(dir, filters, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString suf = QFileInfo(it.next()).suffix().toLower();
+        if (suf == "jpg" || suf == "jpeg") {
+            fmts.insert("jpg");
+        } else if (suf == "png" || suf == "gif" || suf == "webp") {
+            fmts.insert(suf);
+        }
+    }
+    return fmts;
+}
+
+QStringList MainWindow::buildFormatsForWorker() const {
+    QStringList result;
+    if (inputFormats.contains("jpg")) {
+        result << "jpg" << "jpeg";
+    }
+    if (inputFormats.contains("png")) {
+        result << "png";
+    }
+    if (inputFormats.contains("gif")) {
+        result << "gif";
+    }
+    if (inputFormats.contains("webp")) {
+        result << "webp";
+    }
+    return result;
+}
+
+static int findOutputFormatIndex(QComboBox *combo, const QString &format) {
+    for (int i = 0; i < combo->count(); ++i) {
+        const QVariant v = combo->itemData(i);
+        if (v.isValid() && v.toString() == format) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void MainWindow::setOutputFormatEnabled(const QString &format, bool enabled) {
+    const int idx = findOutputFormatIndex(outputFormatCombo, format);
+    if (idx < 0) return;
+    auto *model = qobject_cast<QStandardItemModel *>(outputFormatCombo->model());
+    if (!model) return;
+    QStandardItem *item = model->item(idx);
+    if (!item) return;
+    item->setEnabled(enabled);
+    item->setSelectable(enabled);
+    item->setForeground(QBrush(enabled ? QColor("#111827") : QColor("#9ca3af")));
+    if (!enabled && outputFormatCombo->currentIndex() == idx) {
+        outputFormatCombo->setCurrentIndex(0);
+    }
+}
+
+bool MainWindow::isOutputFormatEnabled(int index) const {
+    auto *model = qobject_cast<QStandardItemModel *>(outputFormatCombo->model());
+    if (!model || index < 0 || index >= model->rowCount()) return true;
+    QStandardItem *item = model->item(index);
+    return !item || item->isEnabled();
+}
+
+void MainWindow::updateOutputFormatOptions() {
+    const bool lossless = losslessCheck->isChecked();
+    const int resizeMode = resizeModeCombo->currentData().toInt();
+    const bool resizeEnabled = resizeMode != 0;
+    const bool hasGif = inputFormats.contains("gif");
+    const bool hasWebp = inputFormats.contains("webp");
+    const bool hasOther = inputFormats.contains("jpg") || inputFormats.contains("png");
+    const bool onlyGif = hasGif && !hasWebp && !hasOther;
+    const bool hasCwebp = EngineRegistry::toolExists("cwebp");
+    const bool hasDwebp = EngineRegistry::toolExists("dwebp");
+    setOutputFormatEnabled("original", true);
+    if (lossless) {
+        setOutputFormatEnabled("jpg", true);
+        setOutputFormatEnabled("png", true);
+        setOutputFormatEnabled("webp", false);
+        setOutputFormatEnabled("gif", false);
+    } else {
+        const bool allowWebp = hasCwebp && !resizeEnabled && !hasGif;
+        setOutputFormatEnabled("webp", allowWebp);
+        setOutputFormatEnabled("gif", onlyGif);
+        const bool allowJpgPng = !(hasWebp && !hasDwebp);
+        setOutputFormatEnabled("jpg", allowJpgPng);
+        setOutputFormatEnabled("png", allowJpgPng);
+    }
+    if (!isOutputFormatEnabled(outputFormatCombo->currentIndex())) {
+        outputFormatCombo->setCurrentIndex(0);
     }
 }
 

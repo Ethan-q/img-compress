@@ -56,8 +56,32 @@
 ## 打包说明（C++/Qt 发行版）
 ### 依赖与工具
 - CMake 3.20+
-- Qt 6（含 Widgets）
-- macOS 需要 macdeployqt，Windows 需要 windeployqt
+- Qt 6（Qt Widgets、Qt Svg、Qt Network）
+- macOS：macdeployqt
+- Windows：windeployqt、Windows 10/11 SDK、MSVC x64 工具链、Ninja（推荐）
+
+### 平台配置说明
+- Windows
+  - 推荐使用 Ninja 生成器
+  - 必填配置可通过环境变量或 JSON：native/build_config.windows.json
+  - 关键配置项（示例，分号可分隔多路径）：
+    - CMAKE_GENERATOR=Ninja
+    - CMAKE_MAKE_PROGRAM=C:\Qt\Tools\Ninja\ninja
+    - QT_PREFIX=C:\Qt\6.10.2\msvc2022_64
+    - MSVC_BIN=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.44.35207\bin\HostX64\x64
+    - MSVC_LIB=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.44.35207\lib\x64
+    - MSVC_INCLUDE=C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.44.35207\include
+    - WINSDK_BIN=D:\Windows Kits\10\bin\10.0.26100.0\x64
+    - WINSDK_LIB=D:\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64;D:\Windows Kits\10\Lib\10.0.26100.0\um\x64
+    - WINSDK_INCLUDE=D:\Windows Kits\10\Include\10.0.26100.0\ucrt;D:\Windows Kits\10\Include\10.0.26100.0\um;D:\Windows Kits\10\Include\10.0.26100.0\shared
+  - 可选：VCINSTALLDIR 设置为 VS 安装目录下的 VC
+  - 执行：python native/build_windows.py
+  - 产物：native/dist/ImgcompressNative.exe
+- macOS
+  - 安装：Xcode Command Line Tools、Qt 6（macOS kits）、CMake、Ninja（可选）
+  - 设置：export CMAKE_PREFIX_PATH=/path/to/Qt/6.x/macos
+  - 执行：python native/build_mac.py
+  - 产物：native/dist/ImgcompressNative.app、native/dist/ImgcompressNative.dmg
 
 ### vendor 工具随包发布
 为保证一致的压缩效果，建议将二进制工具放入项目根目录 vendor/ 并随包发布：
@@ -89,6 +113,21 @@ vendor 目录结构：
 - 执行：python native/build_windows.py
 - 产物：native/dist/ImgcompressNative.exe 与 native/dist/vendor/
 - windeployqt 会自动部署 Qt 运行库
+
+### Windows 安装程序生成
+- 环境：安装 Inno Setup 6（ISCC 或 Compil32 均可，无需固定路径）
+- 一键生成：
+
+```bash
+python native\installer\windows\build_installer.py
+```
+
+- 输出：native\installer\windows\Imgcompress-Setup.exe
+- 语言：默认显示语言选择页并按系统预选。若需中文安装器界面，将 ChineseSimplified.isl 放在 native\installer\windows\lang\ChineseSimplified.isl；否则回退英文
+- 可选签名：设置 SIGN_CERT_PFX、SIGN_CERT_PWD（可选 SIGN_TSA）后自动为 exe 与安装包签名
+- 常见问题：
+  - 找不到编译器：设置 INNOSETUP_ISCC 指向 ISCC 或 Compil32，或将其加入 PATH
+  - 找不到 dist：先执行 python native/build_windows.py
 
 ## Python 版本（学习用）
 Python 目录仅用于学习与对比实现，不作为发行版。发行与交付以 C++/Qt 原生版为准。

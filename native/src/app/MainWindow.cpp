@@ -3,6 +3,7 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QColor>
 #include <QDir>
 #include <QDirIterator>
 #include <QDragEnterEvent>
@@ -26,6 +27,10 @@
 #include <QSizePolicy>
 #include <QSlider>
 #include <QSet>
+#include <QTextCharFormat>
+#include <QTextCursor>
+#include <QTextEdit>
+#include <QTextDocument>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -282,6 +287,12 @@ void MainWindow::setupUi() {
     logArea->setReadOnly(true);
     logArea->setPlaceholderText("压缩日志将在这里显示");
     logArea->setMinimumHeight(240);
+    logSearchInput = new QLineEdit(this);
+    logSearchInput->setPlaceholderText("搜索日志");
+    logSearchInput->setMinimumHeight(30);
+    connect(logSearchInput, &QLineEdit::textChanged, this, [this]() {
+        updateLogSearchHighlights();
+    });
 
     auto *pathGroup = new QGroupBox(this);
     pathGroup->setObjectName("panel");
@@ -469,8 +480,15 @@ void MainWindow::setupUi() {
     optionsGroup->setMinimumWidth(360);
     optionsGroup->setMaximumWidth(440);
 
+    auto *logContainer = new QWidget(this);
+    auto *logLayout = new QVBoxLayout(logContainer);
+    logLayout->setContentsMargins(0, 0, 0, 0);
+    logLayout->setSpacing(8);
+    logLayout->addWidget(logSearchInput);
+    logLayout->addWidget(logArea, 1);
+
     rootLayout->addWidget(dropArea, 0, 0);
-    rootLayout->addWidget(logArea, 1, 0);
+    rootLayout->addWidget(logContainer, 1, 0);
     rootLayout->addWidget(pathContainer, 0, 1);
     rootLayout->addWidget(optionsGroup, 1, 1);
     rootLayout->setColumnStretch(0, 3);
@@ -536,6 +554,7 @@ void MainWindow::startCompression() {
             outputDir = baseDir;
         }
         logArea->clear();
+        updateLogSearchHighlights();
         if (!startFilesCompression(selectedFiles, baseDir, outputDir, formats)) {
             return;
         }
@@ -554,6 +573,7 @@ void MainWindow::startCompression() {
             outputDir = inputDir;
         }
         logArea->clear();
+        updateLogSearchHighlights();
         if (!startDirCompression(inputDir, outputDir, formats)) {
             return;
         }
@@ -564,7 +584,14 @@ void MainWindow::startCompression() {
 }
 
 void MainWindow::onLogMessage(const QString &message) {
-    logArea->appendPlainText(message);
+    QTextCharFormat format;
+    format.setForeground(message.contains("失败") ? QColor("#ef4444") : QColor("#e5e7eb"));
+    QTextCursor cursor = logArea->textCursor();
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertText(message + "\n", format);
+    logArea->setTextCursor(cursor);
+    logArea->ensureCursorVisible();
+    updateLogSearchHighlights();
 }
 
 void MainWindow::onProgressChanged(int percent) {
@@ -596,6 +623,7 @@ void MainWindow::onDropPaths(const QStringList &paths) {
         }
         const QString baseDir = commonBaseDir(files);
         logArea->clear();
+        updateLogSearchHighlights();
         if (startFilesCompression(files, baseDir, baseDir, formats)) {
             isRunning = true;
             startButton->setEnabled(false);
@@ -613,6 +641,28 @@ void MainWindow::onDropPaths(const QStringList &paths) {
         }
     }
     onLogMessage("未找到可压缩图片");
+}
+
+void MainWindow::updateLogSearchHighlights() {
+    const QString keyword = logSearchInput->text().trimmed();
+    QList<QTextEdit::ExtraSelection> selections;
+    if (!keyword.isEmpty()) {
+        QTextCursor cursor(logArea->document());
+        QTextCharFormat format;
+        format.setBackground(QColor("#f59e0b"));
+        format.setForeground(QColor("#0b0f1a"));
+        while (true) {
+            cursor = logArea->document()->find(keyword, cursor);
+            if (cursor.isNull()) {
+                break;
+            }
+            QTextEdit::ExtraSelection selection;
+            selection.cursor = cursor;
+            selection.format = format;
+            selections.append(selection);
+        }
+    }
+    logArea->setExtraSelections(selections);
 }
 
 void MainWindow::updateSelectionMode() {

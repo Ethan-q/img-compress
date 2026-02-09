@@ -55,6 +55,7 @@ private:
     void setupUi();
     void updateSelectionMode();
     void updateCompressionOptionsState();
+    void updateLogSearchHighlights();
     bool readResizeSize(int &width, int &height);
     void setSelectedFiles(const QStringList &files);
     void updateFileSummary();
@@ -98,6 +99,7 @@ private:
     QPushButton *filesButton;
     QProgressBar *progressBar;
     QPlainTextEdit *logArea;
+    QLineEdit *logSearchInput;
     CompressController *controller;
     DropArea *dropArea;
     QStringList selectedFiles;

@@ -475,7 +475,7 @@ void MainWindow::setupUi() {
 
     auto *actionLayout = new QHBoxLayout();
     actionLayout->setSpacing(10);
-    auto *concurrencyLabel = new QLabel("通道", this);
+    auto *concurrencyLabel = new QLabel("线程数", this);
     auto *concurrencyBox = new QWidget(this);
     auto *concurrencyLayout = new QHBoxLayout(concurrencyBox);
     concurrencyLayout->setContentsMargins(0, 0, 0, 0);

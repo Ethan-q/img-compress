@@ -437,6 +437,7 @@ void CompressWorker::run() {
         }
     }
     pool.waitForDone();
+    emit progressChanged(100);
     const qint64 saved = totalBefore - totalAfter;
     const double totalRatio = totalBefore > 0
         ? static_cast<double>(saved) / totalBefore

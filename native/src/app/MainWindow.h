@@ -66,6 +66,8 @@ private:
     void setSelectedFiles(const QStringList &files);
     void updateFileSummary();
     QStringList collectFilesFromPaths(const QStringList &paths) const;
+    QStringList collectUnsupportedFilesFromPaths(const QStringList &paths) const;
+    void logUnsupportedFiles(const QStringList &files);
     QSet<QString> collectInputFormatsFromFiles(const QStringList &files) const;
     QSet<QString> collectInputFormatsFromDir(const QString &dir) const;
     QStringList buildFormatsForWorker() const;
@@ -99,7 +101,6 @@ private:
     QSlider *qualitySlider;
     QLabel *qualityValue;
     QComboBox *engineLevelCombo;
-    QLabel *formatHint;
     QPushButton *startButton;
     QPushButton *filesButton;
     QProgressBar *progressBar;

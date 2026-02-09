@@ -58,8 +58,11 @@ private:
     void updateSelectionMode();
     void updateCompressionOptionsState();
     void updateInputFormatsFromSelection();
+    void updateResizeModeOptions();
     void updateOutputFormatOptions();
+    void setResizeModeEnabled(int index, bool enabled);
     void setOutputFormatEnabled(const QString &format, bool enabled);
+    bool isResizeModeEnabled(int index) const;
     bool isOutputFormatEnabled(int index) const;
     void updateLogSearchHighlights();
     bool readResizeSize(int &width, int &height);

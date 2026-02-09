@@ -982,43 +982,19 @@ void MainWindow::updateCompressionOptionsState() {
     qualitySlider->setEnabled(!lossless);
     qualityValue->setEnabled(!lossless);
     outputFormatCombo->setEnabled(true);
-    if (lossless) {
-        widthInput->setEnabled(false);
-        heightInput->setEnabled(false);
-        widthInput->setVisible(false);
-        heightInput->setVisible(false);
-        sizeLabel->setVisible(false);
-        resizeModeCombo->setEnabled(false);
-    } else {
-        const bool hasWebp = inputFormats.contains("webp");
-        const bool hasDwebp = EngineRegistry::toolExists("dwebp");
-        const bool blockResize = hasWebp && !hasDwebp;
-        if (blockResize) {
-            if (resizeModeCombo->currentIndex() != 0) {
-                resizeModeCombo->setCurrentIndex(0);
-            }
-            widthInput->setEnabled(false);
-            heightInput->setEnabled(false);
-            widthInput->setVisible(false);
-            heightInput->setVisible(false);
-            sizeLabel->setVisible(false);
-            resizeModeCombo->setEnabled(false);
-            widthInput->clear();
-            heightInput->clear();
-        } else {
-            const int resizeMode = resizeModeCombo->currentData().toInt();
-            const bool resizeEnabled = resizeMode != 0;
-            widthInput->setEnabled(resizeEnabled);
-            heightInput->setEnabled(resizeEnabled);
-            widthInput->setVisible(resizeEnabled);
-            heightInput->setVisible(resizeEnabled);
-            sizeLabel->setVisible(resizeEnabled);
-            resizeModeCombo->setEnabled(true);
-            if (!resizeEnabled) {
-                widthInput->clear();
-                heightInput->clear();
-            }
-        }
+    updateResizeModeOptions();
+    const int resizeMode = resizeModeCombo->currentData().toInt();
+    const bool resizeEnabled = resizeMode != 0
+        && isResizeModeEnabled(resizeModeCombo->currentIndex());
+    widthInput->setEnabled(resizeEnabled);
+    heightInput->setEnabled(resizeEnabled);
+    widthInput->setVisible(resizeEnabled);
+    heightInput->setVisible(resizeEnabled);
+    sizeLabel->setVisible(resizeEnabled);
+    resizeModeCombo->setEnabled(true);
+    if (!resizeEnabled) {
+        widthInput->clear();
+        heightInput->clear();
     }
     updateOutputFormatOptions();
 }
@@ -1092,6 +1068,19 @@ static int findOutputFormatIndex(QComboBox *combo, const QString &format) {
     return -1;
 }
 
+void MainWindow::setResizeModeEnabled(int index, bool enabled) {
+    auto *model = qobject_cast<QStandardItemModel *>(resizeModeCombo->model());
+    if (!model || index < 0 || index >= model->rowCount()) return;
+    QStandardItem *item = model->item(index);
+    if (!item) return;
+    item->setEnabled(enabled);
+    item->setSelectable(enabled);
+    item->setForeground(QBrush(enabled ? QColor("#111827") : QColor("#9ca3af")));
+    if (!enabled && resizeModeCombo->currentIndex() == index) {
+        resizeModeCombo->setCurrentIndex(0);
+    }
+}
+
 void MainWindow::setOutputFormatEnabled(const QString &format, bool enabled) {
     const int idx = findOutputFormatIndex(outputFormatCombo, format);
     if (idx < 0) return;
@@ -1107,11 +1096,34 @@ void MainWindow::setOutputFormatEnabled(const QString &format, bool enabled) {
     }
 }
 
+bool MainWindow::isResizeModeEnabled(int index) const {
+    auto *model = qobject_cast<QStandardItemModel *>(resizeModeCombo->model());
+    if (!model || index < 0 || index >= model->rowCount()) return true;
+    QStandardItem *item = model->item(index);
+    return !item || item->isEnabled();
+}
+
 bool MainWindow::isOutputFormatEnabled(int index) const {
     auto *model = qobject_cast<QStandardItemModel *>(outputFormatCombo->model());
     if (!model || index < 0 || index >= model->rowCount()) return true;
     QStandardItem *item = model->item(index);
     return !item || item->isEnabled();
+}
+
+void MainWindow::updateResizeModeOptions() {
+    const bool lossless = losslessCheck->isChecked();
+    const bool hasWebp = inputFormats.contains("webp");
+    const bool hasDwebp = EngineRegistry::toolExists("dwebp");
+    const bool blockResize = hasWebp && !hasDwebp;
+    for (int i = 0; i < resizeModeCombo->count(); ++i) {
+        const QVariant v = resizeModeCombo->itemData(i);
+        const int mode = v.isValid() ? v.toInt() : 0;
+        const bool allowMode = lossless ? (mode == 0) : (!blockResize || mode == 0);
+        setResizeModeEnabled(i, allowMode);
+    }
+    if (!isResizeModeEnabled(resizeModeCombo->currentIndex())) {
+        resizeModeCombo->setCurrentIndex(0);
+    }
 }
 
 void MainWindow::updateOutputFormatOptions() {

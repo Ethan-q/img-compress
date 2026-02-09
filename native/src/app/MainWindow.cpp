@@ -990,17 +990,34 @@ void MainWindow::updateCompressionOptionsState() {
         sizeLabel->setVisible(false);
         resizeModeCombo->setEnabled(false);
     } else {
-        const int resizeMode = resizeModeCombo->currentData().toInt();
-        const bool resizeEnabled = resizeMode != 0;
-        widthInput->setEnabled(resizeEnabled);
-        heightInput->setEnabled(resizeEnabled);
-        widthInput->setVisible(resizeEnabled);
-        heightInput->setVisible(resizeEnabled);
-        sizeLabel->setVisible(resizeEnabled);
-        resizeModeCombo->setEnabled(true);
-        if (!resizeEnabled) {
+        const bool hasWebp = inputFormats.contains("webp");
+        const bool hasDwebp = EngineRegistry::toolExists("dwebp");
+        const bool blockResize = hasWebp && !hasDwebp;
+        if (blockResize) {
+            if (resizeModeCombo->currentIndex() != 0) {
+                resizeModeCombo->setCurrentIndex(0);
+            }
+            widthInput->setEnabled(false);
+            heightInput->setEnabled(false);
+            widthInput->setVisible(false);
+            heightInput->setVisible(false);
+            sizeLabel->setVisible(false);
+            resizeModeCombo->setEnabled(false);
             widthInput->clear();
             heightInput->clear();
+        } else {
+            const int resizeMode = resizeModeCombo->currentData().toInt();
+            const bool resizeEnabled = resizeMode != 0;
+            widthInput->setEnabled(resizeEnabled);
+            heightInput->setEnabled(resizeEnabled);
+            widthInput->setVisible(resizeEnabled);
+            heightInput->setVisible(resizeEnabled);
+            sizeLabel->setVisible(resizeEnabled);
+            resizeModeCombo->setEnabled(true);
+            if (!resizeEnabled) {
+                widthInput->clear();
+                heightInput->clear();
+            }
         }
     }
     updateOutputFormatOptions();
@@ -1017,7 +1034,7 @@ void MainWindow::updateInputFormatsFromSelection() {
             inputFormats.clear();
         }
     }
-    updateOutputFormatOptions();
+    updateCompressionOptionsState();
 }
 
 QSet<QString> MainWindow::collectInputFormatsFromFiles(const QStringList &files) const {

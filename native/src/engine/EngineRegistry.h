@@ -33,4 +33,5 @@ public:
         const QString &output,
         const CompressionOptions &options
     );
+    static bool toolExists(const QString &name);
 };

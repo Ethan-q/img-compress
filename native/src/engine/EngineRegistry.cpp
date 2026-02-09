@@ -472,15 +472,23 @@ CompressionResult EngineRegistry::compressFile(
                 }
             }
         }
-        const QString optimizer = findTool({"oxipng", "optipng"});
-        if (optimizer.isEmpty()) {
-            return missingEngine(source, "oxipng/optipng");
+        QString optimizer;
+        if (options.lossless) {
+            optimizer = findTool({"oxipng"});
+            if (optimizer.isEmpty()) {
+                return missingEngine(source, "oxipng");
+            }
+        } else {
+            optimizer = findTool({"oxipng", "optipng"});
+            if (optimizer.isEmpty()) {
+                return missingEngine(source, "oxipng/optipng");
+            }
         }
         QStringList args;
         const QString normalized = normalizeProfile(options.profile);
         if (optimizer.contains("oxipng")) {
             const QString level = normalized == "strong" ? "6" : (normalized == "balanced" ? "5" : "4");
-            args = {"-o", level, "--strip", "all", "-out", output, source};
+            args = {"-o", level, "--strip", "all", "--out", output, source};
         } else {
             const QString level = normalized == "strong" ? "6" : (normalized == "balanced" ? "6" : "5");
             args = {QString("-o%1").arg(level), "-strip", "all", "-out", output, source};

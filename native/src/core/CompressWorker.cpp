@@ -8,14 +8,17 @@
 #include <QImage>
 #include <QImageReader>
 #include <QImageWriter>
+#include <QHash>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QSet>
 #include <QThread>
 #include <QThreadPool>
 #include <QTemporaryFile>
+#include <QVector>
 #include <QWaitCondition>
 #include <QQueue>
+#include <algorithm>
 
 namespace {
 QString ensureUniquePath(const QString &candidate, const QString &sourcePath, const QString &stem, const QString &suffix) {
@@ -58,9 +61,11 @@ QString normalizeSuffix(const QString &suffix) {
 
 struct TaskOutcome {
     QString fileName;
+    QString filePath;
     CompressionResult result;
     bool hasResult;
     QStringList logs;
+    qint64 elapsedMs;
 };
 
 TaskOutcome compressSingle(
@@ -72,6 +77,7 @@ TaskOutcome compressSingle(
     TaskOutcome outcome;
     const QFileInfo sourceInfo(file);
     outcome.fileName = sourceInfo.fileName();
+    outcome.filePath = sourceInfo.absoluteFilePath();
     const QString relativePath = inputRoot.relativeFilePath(file);
     const QFileInfo relativeInfo(relativePath);
     const QString sourceSuffix = normalizeSuffix(sourceInfo.suffix().toLower());
@@ -296,9 +302,12 @@ public:
     }
 
     void run() override {
+        const QDateTime started = QDateTime::currentDateTime();
         const TaskOutcome outcome = compressSingle(filePath, input, output, opts);
+        TaskOutcome finished = outcome;
+        finished.elapsedMs = started.msecsTo(QDateTime::currentDateTime());
         QMutexLocker locker(queueMutex);
-        resultQueue->enqueue(outcome);
+        resultQueue->enqueue(finished);
         queueCondition->wakeOne();
     }
 
@@ -390,22 +399,49 @@ void CompressWorker::run() {
     QQueue<TaskOutcome> outcomes;
     QMutex queueMutex;
     QWaitCondition queueCondition;
+    QHash<QString, QDateTime> activeTasks;
+    QDateTime lastHeartbeat = QDateTime::currentDateTime();
     for (const QString &file : workingFiles) {
         pool.start(new CompressTask(file, inputRoot, outputRoot, options, &outcomes, &queueMutex, &queueCondition));
+        activeTasks.insert(file, QDateTime::currentDateTime());
     }
     const int total = workingFiles.size();
     while (completed < total) {
         queueMutex.lock();
         if (outcomes.isEmpty()) {
-            queueCondition.wait(&queueMutex);
+            queueCondition.wait(&queueMutex, 2000);
         }
         QQueue<TaskOutcome> batch;
         while (!outcomes.isEmpty()) {
             batch.enqueue(outcomes.dequeue());
         }
         queueMutex.unlock();
+        if (batch.isEmpty()) {
+            const QDateTime now = QDateTime::currentDateTime();
+            if (lastHeartbeat.msecsTo(now) >= 10000 && !activeTasks.isEmpty()) {
+                QVector<QPair<qint64, QString>> longest;
+                longest.reserve(activeTasks.size());
+                for (auto it = activeTasks.constBegin(); it != activeTasks.constEnd(); ++it) {
+                    const qint64 elapsed = it.value().msecsTo(now);
+                    longest.append(qMakePair(elapsed, QFileInfo(it.key()).fileName()));
+                }
+                std::sort(longest.begin(), longest.end(), [](const auto &a, const auto &b) {
+                    return a.first > b.first;
+                });
+                const int limit = qMin(3, longest.size());
+                QStringList items;
+                for (int i = 0; i < limit; i += 1) {
+                    items << QString("%1(%2s)").arg(longest[i].second).arg(longest[i].first / 1000.0, 0, 'f', 1);
+                }
+                emit logMessage(QString("处理中 %1 张，最长已运行：%2").arg(activeTasks.size()).arg(items.join("，")));
+                lastHeartbeat = now;
+            }
+        }
         while (!batch.isEmpty()) {
             const TaskOutcome outcome = batch.dequeue();
+            if (!outcome.filePath.isEmpty()) {
+                activeTasks.remove(outcome.filePath);
+            }
             for (const QString &line : outcome.logs) {
                 emit logMessage(line);
             }
@@ -418,16 +454,18 @@ void CompressWorker::run() {
                         ? 1.0 - (static_cast<double>(outcome.result.outputSize) / outcome.result.originalSize)
                         : 0.0;
                     emit logMessage(
-                        QString("%1 压缩完成，节省 %2，引擎 %3")
+                        QString("%1 压缩完成，节省 %2，引擎 %3，耗时 %4s")
                             .arg(outcome.fileName)
                             .arg(QString::number(ratio * 100.0, 'f', 1) + "%")
                             .arg(outcome.result.engine)
+                            .arg(outcome.elapsedMs / 1000.0, 0, 'f', 1)
                     );
                 } else {
                     emit logMessage(
-                        QString("%1 压缩失败：%2")
+                        QString("%1 压缩失败：%2，耗时 %3s")
                             .arg(outcome.fileName)
                             .arg(outcome.result.message)
+                            .arg(outcome.elapsedMs / 1000.0, 0, 'f', 1)
                     );
                 }
             }

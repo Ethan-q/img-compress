@@ -481,8 +481,8 @@ CompressionResult EngineRegistry::compressFile(
         }
         QStringList args;
         const QString normalized = normalizeProfile(options.profile);
-        const QString level = normalized == "strong" ? "4" : (normalized == "balanced" ? "3" : "2");
-        args = {"-o", level, "--strip", "all", "--out", output, source};
+        const QString level = normalized == "strong" ? "3" : (normalized == "balanced" ? "2" : "1");
+        args = {"-o", level, "--strip", "safe", "--out", output, source};
         const auto res = runProcessWithCode(optimizer, args);
         const bool ok = res.first == 0;
         const qint64 outputSize = QFileInfo(output).size();

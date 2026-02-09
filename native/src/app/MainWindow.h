@@ -13,6 +13,7 @@ class QLabel;
 class QPlainTextEdit;
 class QProgressBar;
 class QIntValidator;
+class QSpinBox;
 
 class CompressController;
 class QDragEnterEvent;
@@ -91,6 +92,7 @@ private:
     QLabel *sizeLabel;
     QSlider *qualitySlider;
     QLabel *qualityValue;
+    QSpinBox *concurrencySpin;
     QCheckBox *formatJpg;
     QCheckBox *formatPng;
     QCheckBox *formatGif;

@@ -9,6 +9,7 @@ struct CompressionOptions {
     int quality;
     QString profile;
     QString outputFormat;
+    int concurrency;
     bool resizeEnabled;
     int targetWidth;
     int targetHeight;

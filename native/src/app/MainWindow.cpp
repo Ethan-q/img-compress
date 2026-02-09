@@ -26,11 +26,13 @@
 #include <QProgressBar>
 #include <QSizePolicy>
 #include <QSlider>
+#include <QSpinBox>
 #include <QSet>
 #include <QTextCharFormat>
 #include <QTextCursor>
 #include <QTextEdit>
 #include <QTextDocument>
+#include <QThread>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -386,6 +388,16 @@ void MainWindow::setupUi() {
     optionsLayout->addRow(losslessCheck);
     optionsLayout->addRow("压缩预设", profileCombo);
     optionsLayout->addRow("有损质量", qualityLayout);
+    concurrencySpin = new QSpinBox(this);
+    int idealThreads = QThread::idealThreadCount();
+    if (idealThreads < 1) {
+        idealThreads = 4;
+    }
+    const int maxThreads = qMax(1, idealThreads - 1);
+    concurrencySpin->setRange(1, maxThreads);
+    concurrencySpin->setValue(maxThreads);
+    concurrencySpin->setFixedWidth(88);
+    optionsLayout->addRow(QString("并发数(≤%1)").arg(maxThreads), concurrencySpin);
 
     auto *formatLayout = new QHBoxLayout();
     formatJpg = new QCheckBox("JPG", this);
@@ -836,6 +848,7 @@ bool MainWindow::startDirCompression(
         qualitySlider->value(),
         profileCombo->currentText(),
         outputFormat,
+        concurrencySpin->value(),
         resizeEnabled,
         targetWidth,
         targetHeight,
@@ -884,6 +897,7 @@ bool MainWindow::startFilesCompression(
         qualitySlider->value(),
         profileCombo->currentText(),
         outputFormat,
+        concurrencySpin->value(),
         resizeEnabled,
         targetWidth,
         targetHeight,

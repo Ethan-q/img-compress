@@ -380,24 +380,53 @@ CompressionResult EngineRegistry::compressFile(
         }
         const QStringList baseArgs = {"-O3", "--no-comments", "--no-names", "--no-extensions"};
         QStringList args = baseArgs;
-        if (!options.lossless) {
+        const bool useLossy = !options.lossless;
+        int lossy = 0;
+        int colors = 0;
+        if (useLossy) {
             const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
-            int lossy = qMax(0, static_cast<int>((100 - quality) * 2));
+            lossy = qMax(0, static_cast<int>((100 - quality) * 2));
             lossy = adjustLossy(options.profile, lossy);
-            int colors = qMax(32, static_cast<int>(256 * quality / 100));
+            colors = qMax(32, static_cast<int>(256 * quality / 100));
             colors = adjustColors(options.profile, colors);
             args << QString("--lossy=%1").arg(lossy) << QString("--colors=%1").arg(colors);
         }
         args << source << "-o" << output;
         auto res = runProcessWithOutput(gifsicle, args);
         bool ok = res.first;
-        if (!ok && !options.lossless) {
+        bool usedLossy = useLossy;
+        if (!ok && useLossy) {
             QStringList retryArgs = baseArgs;
             retryArgs << source << "-o" << output;
             res = runProcessWithOutput(gifsicle, retryArgs);
             ok = res.first;
+            usedLossy = false;
         }
-        const qint64 outputSize = QFileInfo(output).size();
+        qint64 outputSize = QFileInfo(output).size();
+        if (ok && usedLossy && outputSize >= originalSize) {
+            const int retryLossy = qMin(200, static_cast<int>(lossy * 1.3) + 5);
+            const int retryColors = qMax(32, static_cast<int>(colors * 0.8));
+            QTemporaryFile temp(QDir(QFileInfo(output).absolutePath()).filePath(".imgcompress_gif_XXXXXX.gif"));
+            temp.setAutoRemove(true);
+            if (temp.open()) {
+                const QString tempPath = temp.fileName();
+                temp.close();
+                QStringList retryArgs = baseArgs;
+                retryArgs << QString("--lossy=%1").arg(retryLossy) << QString("--colors=%1").arg(retryColors);
+                retryArgs << source << "-o" << tempPath;
+                const auto retryRes = runProcessWithOutput(gifsicle, retryArgs);
+                if (retryRes.first) {
+                    const qint64 retrySize = QFileInfo(tempPath).size();
+                    if (retrySize > 0 && retrySize < outputSize) {
+                        QFile::remove(output);
+                        QFile::copy(tempPath, output);
+                        outputSize = retrySize;
+                        res = retryRes;
+                        ok = true;
+                    }
+                }
+            }
+        }
         QString msg = ok ? "成功" : "失败";
         if (!ok) {
             QString tail = res.second.trimmed();

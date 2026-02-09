@@ -118,16 +118,18 @@ void CompressWorker::run() {
         const QString sourceSuffix = sourceInfo.suffix().toLower();
         const QByteArray detectedFormat = QImageReader::imageFormat(file);
         const QString actualSuffix = QString::fromLatin1(detectedFormat).toLower();
-        if (!actualSuffix.isEmpty() && actualSuffix != sourceSuffix) {
+        const bool formatMismatch = !actualSuffix.isEmpty() && actualSuffix != sourceSuffix;
+        const QString effectiveSuffix = actualSuffix.isEmpty() ? sourceSuffix : actualSuffix;
+        if (formatMismatch) {
             emit logMessage(
-                QString("%1 实际格式为 %2，与扩展名 %3 不一致")
+                QString("%1 实际格式为 %2，与扩展名 %3 不一致，将按实际格式输出并压缩")
                     .arg(sourceInfo.fileName())
                     .arg(actualSuffix)
                     .arg(sourceSuffix)
             );
         }
         const QString targetFormat = options.outputFormat.isEmpty() || options.outputFormat == "original"
-            ? (!actualSuffix.isEmpty() ? actualSuffix : sourceSuffix)
+            ? effectiveSuffix
             : options.outputFormat.toLower();
         const QString baseName = sourceInfo.completeBaseName();
         const QString relativeDir = relativeInfo.path();
@@ -143,9 +145,9 @@ void CompressWorker::run() {
         }
         const qint64 sourceSize = sourceInfo.size();
         CompressionResult result{false, sourceSize, sourceSize, "无", "失败"};
-        const bool convertToWebp = targetFormat == "webp" && (actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) != "webp";
-        const bool convertToGif = targetFormat == "gif" && (actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) != "gif";
-        const bool convertFromWebp = (actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) == "webp"
+        const bool convertToWebp = targetFormat == "webp" && effectiveSuffix != "webp";
+        const bool convertToGif = targetFormat == "gif" && effectiveSuffix != "gif";
+        const bool convertFromWebp = effectiveSuffix == "webp"
             && (targetFormat == "jpg" || targetFormat == "jpeg" || targetFormat == "png");
         if (convertToGif) {
             emit logMessage(QString("%1 转换失败：不支持转换为GIF").arg(sourceInfo.fileName()));
@@ -153,7 +155,7 @@ void CompressWorker::run() {
             emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
             continue;
         }
-        if (options.resizeEnabled && ((actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) == "webp" || targetFormat == "webp")) {
+        if (options.resizeEnabled && (effectiveSuffix == "webp" || targetFormat == "webp")) {
             emit logMessage(QString("%1 转换失败：启用尺寸裁剪/缩放时不支持 WebP（需要 Qt WebP 插件）").arg(sourceInfo.fileName()));
             completed += 1;
             emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
@@ -198,15 +200,43 @@ void CompressWorker::run() {
                     }
                 }
             }
-        } else if (options.resizeEnabled || targetFormat != (actualSuffix.isEmpty() ? sourceSuffix : actualSuffix)) {
+        } else if (options.resizeEnabled || targetFormat != effectiveSuffix || formatMismatch) {
+            if (!options.resizeEnabled && formatMismatch && targetFormat == effectiveSuffix) {
+                QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + effectiveSuffix));
+                temp.setAutoRemove(true);
+                if (!temp.open()) {
+                    emit logMessage(QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName()));
+                    completed += 1;
+                    emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
+                    continue;
+                }
+                const QString tempPath = temp.fileName();
+                temp.close();
+                QFile::remove(tempPath);
+                if (!QFile::copy(file, tempPath)) {
+                    emit logMessage(QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName()));
+                    completed += 1;
+                    emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
+                    continue;
+                }
+                result = EngineRegistry::compressFile(tempPath, outputPath, options);
+                if (!result.success) {
+                    QFile::remove(outputPath);
+                    QFile::copy(tempPath, outputPath);
+                    result = {true, sourceSize, QFileInfo(outputPath).size(), "原图", "已按实际格式输出"};
+                } else {
+                    result.originalSize = sourceSize;
+                    result.outputSize = QFileInfo(outputPath).size();
+                }
+            } else {
             QImageReader reader(file);
             reader.setAutoTransform(true);
-            if ((actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) == "webp") {
+            if (effectiveSuffix == "webp") {
                 reader.setFormat("webp");
             }
             QImage image = reader.read();
             if (image.isNull()) {
-                if ((actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) == "webp") {
+                if (effectiveSuffix == "webp") {
                     emit logMessage(QString("%1 转换失败：WebP 解码不可用（缺少 dwebp 或 Qt WebP 插件）").arg(sourceInfo.fileName()));
                 } else {
                     emit logMessage(QString("%1 转换失败：无法读取图片").arg(sourceInfo.fileName()));
@@ -240,7 +270,7 @@ void CompressWorker::run() {
             QString tempFormat = targetFormat;
             bool allowTempFallback = true;
             if (convertToWebp || convertToGif) {
-                tempFormat = (!actualSuffix.isEmpty() ? actualSuffix : (sourceSuffix.isEmpty() ? "png" : sourceSuffix));
+                tempFormat = effectiveSuffix.isEmpty() ? "png" : effectiveSuffix;
                 allowTempFallback = false;
             }
             QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
@@ -272,6 +302,7 @@ void CompressWorker::run() {
             } else {
                 result.originalSize = sourceSize;
                 result.outputSize = QFileInfo(outputPath).size();
+            }
             }
         } else {
             result = EngineRegistry::compressFile(file, outputPath, options);

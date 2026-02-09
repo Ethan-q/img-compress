@@ -71,6 +71,13 @@ int adjustColors(const QString &profile, int colors) {
     return colors;
 }
 
+QString normalizeSuffix(const QString &suffix) {
+    if (suffix == "jpeg") {
+        return "jpg";
+    }
+    return suffix;
+}
+
 QString detectPlatform() {
     const QString product = QSysInfo::productType().toLower();
     if (product == "osx" || product == "macos" || product == "darwin") {
@@ -173,6 +180,18 @@ QPair<bool, QString> runProcessWithOutput(const QString &program, const QStringL
     return qMakePair(ok, output);
 }
 
+QPair<int, QString> runProcessWithCode(const QString &program, const QStringList &args) {
+    QProcess process;
+    process.setProgram(program);
+    process.setArguments(args);
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    process.waitForFinished(-1);
+    const int code = process.exitStatus() == QProcess::NormalExit ? process.exitCode() : -1;
+    const QString output = QString::fromUtf8(process.readAllStandardOutput());
+    return qMakePair(code, output);
+}
+
 CompressionResult copyOriginal(const QString &source, const QString &output) {
     QFile::remove(output);
     QFile::copy(source, output);
@@ -231,9 +250,9 @@ CompressionResult EngineRegistry::compressFile(
     const QString &output,
     const CompressionOptions &options
 ) {
-    const QString suffix = QFileInfo(source).suffix().toLower();
+    const QString suffix = normalizeSuffix(QFileInfo(source).suffix().toLower());
     const qint64 originalSize = QFileInfo(source).size();
-    const QString outputFormat = options.outputFormat.toLower();
+    const QString outputFormat = normalizeSuffix(options.outputFormat.toLower());
     if (outputFormat == "gif" && suffix != "gif") {
         return {false, originalSize, originalSize, "gifsicle", "不支持转换为GIF"};
     }
@@ -253,7 +272,7 @@ CompressionResult EngineRegistry::compressFile(
         const qint64 outputSize = QFileInfo(output).size();
         return {ok, originalSize, outputSize, "cwebp", ok ? "成功" : "失败"};
     }
-    if (suffix == "webp" && (outputFormat == "jpg" || outputFormat == "jpeg" || outputFormat == "png")) {
+    if (suffix == "webp" && (outputFormat == "jpg" || outputFormat == "png")) {
         const QString dwebp = findTool({"dwebp"});
         if (dwebp.isEmpty()) {
             return {false, originalSize, originalSize, "dwebp", "不支持：缺少 dwebp"};
@@ -294,7 +313,7 @@ CompressionResult EngineRegistry::compressFile(
         const qint64 outputSize = QFileInfo(output).size();
         return {ok, originalSize, outputSize, "dwebp+mozjpeg", ok ? "成功" : "失败"};
     }
-    if (suffix == "jpg" || suffix == "jpeg") {
+    if (suffix == "jpg") {
         if (options.lossless) {
             const QString jpegtran = findTool({"jpegtran"});
             if (jpegtran.isEmpty()) {
@@ -349,10 +368,17 @@ CompressionResult EngineRegistry::compressFile(
                     "--force",
                     source
                 };
-                const bool ok = runProcess(pngquant, args);
+                const auto res = runProcessWithCode(pngquant, args);
+                const bool ok = res.first == 0;
                 const qint64 outputSize = QFileInfo(output).size();
                 if (ok) {
                     return {true, originalSize, outputSize, "pngquant", "成功"};
+                }
+                if (res.first == 99) {
+                    QFile::remove(output);
+                    QFile::copy(source, output);
+                    const qint64 copiedSize = QFileInfo(output).size();
+                    return {true, originalSize, copiedSize, "原图", "pngquant 无收益，保留原图"};
                 }
             }
         }

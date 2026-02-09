@@ -42,6 +42,13 @@ int adjustQuality(int quality, const QString &profile) {
     }
     return quality;
 }
+
+QString normalizeSuffix(const QString &suffix) {
+    if (suffix == "jpeg") {
+        return "jpg";
+    }
+    return suffix;
+}
 }
 
 CompressWorker::CompressWorker(QObject *parent) : QObject(parent), useFileList(false) {}
@@ -115,9 +122,9 @@ void CompressWorker::run() {
         const QFileInfo sourceInfo(file);
         const QString relativePath = inputRoot.relativeFilePath(file);
         const QFileInfo relativeInfo(relativePath);
-        const QString sourceSuffix = sourceInfo.suffix().toLower();
+        const QString sourceSuffix = normalizeSuffix(sourceInfo.suffix().toLower());
         const QByteArray detectedFormat = QImageReader::imageFormat(file);
-        const QString actualSuffix = QString::fromLatin1(detectedFormat).toLower();
+        const QString actualSuffix = normalizeSuffix(QString::fromLatin1(detectedFormat).toLower());
         const bool formatMismatch = !actualSuffix.isEmpty() && actualSuffix != sourceSuffix;
         const QString effectiveSuffix = actualSuffix.isEmpty() ? sourceSuffix : actualSuffix;
         if (formatMismatch) {
@@ -128,9 +135,11 @@ void CompressWorker::run() {
                     .arg(sourceSuffix)
             );
         }
-        const QString targetFormat = options.outputFormat.isEmpty() || options.outputFormat == "original"
+        const QString rawOutputFormat = options.outputFormat.toLower();
+        const QString normalizedOutputFormat = normalizeSuffix(rawOutputFormat);
+        const QString targetFormat = rawOutputFormat.isEmpty() || rawOutputFormat == "original"
             ? effectiveSuffix
-            : options.outputFormat.toLower();
+            : normalizedOutputFormat;
         const QString baseName = sourceInfo.completeBaseName();
         const QString relativeDir = relativeInfo.path();
         const QString outputFileName = targetFormat.isEmpty() ? baseName : baseName + "." + targetFormat;
@@ -148,7 +157,7 @@ void CompressWorker::run() {
         const bool convertToWebp = targetFormat == "webp" && effectiveSuffix != "webp";
         const bool convertToGif = targetFormat == "gif" && effectiveSuffix != "gif";
         const bool convertFromWebp = effectiveSuffix == "webp"
-            && (targetFormat == "jpg" || targetFormat == "jpeg" || targetFormat == "png");
+            && (targetFormat == "jpg" || targetFormat == "png");
         if (convertToGif) {
             emit logMessage(QString("%1 转换失败：不支持转换为GIF").arg(sourceInfo.fileName()));
             completed += 1;

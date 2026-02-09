@@ -1,8 +1,9 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QStringList>
 #include <QFrame>
+#include <QSet>
+#include <QStringList>
 
 class QLineEdit;
 class QPushButton;
@@ -56,17 +57,22 @@ private:
     void setupUi();
     void updateSelectionMode();
     void updateCompressionOptionsState();
+    void updateInputFormatsFromSelection();
+    void updateOutputFormatOptions();
+    void setOutputFormatEnabled(const QString &format, bool enabled);
+    bool isOutputFormatEnabled(int index) const;
     void updateLogSearchHighlights();
     bool readResizeSize(int &width, int &height);
     void setSelectedFiles(const QStringList &files);
     void updateFileSummary();
     QStringList collectFilesFromPaths(const QStringList &paths) const;
+    QSet<QString> collectInputFormatsFromFiles(const QStringList &files) const;
+    QSet<QString> collectInputFormatsFromDir(const QString &dir) const;
+    QStringList buildFormatsForWorker() const;
     QString commonBaseDir(const QStringList &files) const;
     QString selectedOutputFormat() const;
     QString openDirectoryDialog(const QString &title, const QString &initialDir);
     QStringList openFilesDialog(const QString &title);
-    QStringList selectedInputFormats() const;
-    QStringList defaultInputFormats() const;
     bool startDirCompression(
         const QString &inputDir,
         const QString &outputDir,
@@ -93,10 +99,7 @@ private:
     QSlider *qualitySlider;
     QLabel *qualityValue;
     QComboBox *engineLevelCombo;
-    QCheckBox *formatJpg;
-    QCheckBox *formatPng;
-    QCheckBox *formatGif;
-    QCheckBox *formatWebp;
+    QLabel *formatHint;
     QPushButton *startButton;
     QPushButton *filesButton;
     QProgressBar *progressBar;
@@ -105,5 +108,6 @@ private:
     CompressController *controller;
     DropArea *dropArea;
     QStringList selectedFiles;
+    QSet<QString> inputFormats;
     bool isRunning;
 };

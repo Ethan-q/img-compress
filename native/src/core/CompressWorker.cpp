@@ -116,8 +116,18 @@ void CompressWorker::run() {
         const QString relativePath = inputRoot.relativeFilePath(file);
         const QFileInfo relativeInfo(relativePath);
         const QString sourceSuffix = sourceInfo.suffix().toLower();
+        const QByteArray detectedFormat = QImageReader::imageFormat(file);
+        const QString actualSuffix = QString::fromLatin1(detectedFormat).toLower();
+        if (!actualSuffix.isEmpty() && actualSuffix != sourceSuffix) {
+            emit logMessage(
+                QString("%1 实际格式为 %2，与扩展名 %3 不一致")
+                    .arg(sourceInfo.fileName())
+                    .arg(actualSuffix)
+                    .arg(sourceSuffix)
+            );
+        }
         const QString targetFormat = options.outputFormat.isEmpty() || options.outputFormat == "original"
-            ? sourceSuffix
+            ? (!actualSuffix.isEmpty() ? actualSuffix : sourceSuffix)
             : options.outputFormat.toLower();
         const QString baseName = sourceInfo.completeBaseName();
         const QString relativeDir = relativeInfo.path();
@@ -133,9 +143,9 @@ void CompressWorker::run() {
         }
         const qint64 sourceSize = sourceInfo.size();
         CompressionResult result{false, sourceSize, sourceSize, "无", "失败"};
-        const bool convertToWebp = targetFormat == "webp" && sourceSuffix != "webp";
-        const bool convertToGif = targetFormat == "gif" && sourceSuffix != "gif";
-        const bool convertFromWebp = sourceSuffix == "webp"
+        const bool convertToWebp = targetFormat == "webp" && (actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) != "webp";
+        const bool convertToGif = targetFormat == "gif" && (actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) != "gif";
+        const bool convertFromWebp = (actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) == "webp"
             && (targetFormat == "jpg" || targetFormat == "jpeg" || targetFormat == "png");
         if (convertToGif) {
             emit logMessage(QString("%1 转换失败：不支持转换为GIF").arg(sourceInfo.fileName()));
@@ -143,7 +153,7 @@ void CompressWorker::run() {
             emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
             continue;
         }
-        if (options.resizeEnabled && (sourceSuffix == "webp" || targetFormat == "webp")) {
+        if (options.resizeEnabled && ((actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) == "webp" || targetFormat == "webp")) {
             emit logMessage(QString("%1 转换失败：启用尺寸裁剪/缩放时不支持 WebP（需要 Qt WebP 插件）").arg(sourceInfo.fileName()));
             completed += 1;
             emit progressChanged(static_cast<int>((static_cast<double>(completed) / workingFiles.size()) * 100.0));
@@ -151,15 +161,52 @@ void CompressWorker::run() {
         }
         if ((convertToWebp || convertFromWebp) && !options.resizeEnabled) {
             result = EngineRegistry::compressFile(file, outputPath, options);
-        } else if (options.resizeEnabled || targetFormat != sourceSuffix) {
+            if (!result.success) {
+                QImageReader reader(file);
+                reader.setAutoTransform(true);
+                if (!actualSuffix.isEmpty()) {
+                    reader.setFormat(actualSuffix.toLatin1());
+                }
+                QImage image = reader.read();
+                if (!image.isNull()) {
+                    QString tempFormat = !actualSuffix.isEmpty() ? actualSuffix : "png";
+                    QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
+                    temp.setAutoRemove(true);
+                    if (temp.open()) {
+                        const QString tempPath = temp.fileName();
+                        temp.close();
+                        QImageWriter writer(tempPath, tempFormat.toLatin1());
+                        const int quality = options.lossless
+                            ? 100
+                            : qBound(1, adjustQuality(options.quality, options.profile), 100);
+                        writer.setQuality(quality);
+                        if (writer.write(image)) {
+                            result = EngineRegistry::compressFile(tempPath, outputPath, options);
+                            if (!result.success) {
+                                QFile::remove(outputPath);
+                                QFile::copy(tempPath, outputPath);
+                                result = {true, sourceSize, QFileInfo(outputPath).size(), "Qt", "已转换"};
+                            } else {
+                                result.originalSize = sourceSize;
+                                result.outputSize = QFileInfo(outputPath).size();
+                            }
+                        } else {
+                            emit logMessage(QString("%1 转换失败：无法写入格式").arg(sourceInfo.fileName()));
+                        }
+                    } else {
+                        emit logMessage(QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName()));
+                    }
+                }
+            }
+        } else if (options.resizeEnabled || targetFormat != (actualSuffix.isEmpty() ? sourceSuffix : actualSuffix)) {
             QImageReader reader(file);
             reader.setAutoTransform(true);
-            if (sourceSuffix == "webp") {
+            if ((actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) == "webp") {
                 reader.setFormat("webp");
             }
             QImage image = reader.read();
             if (image.isNull()) {
-                if (sourceSuffix == "webp") {
+                if ((actualSuffix.isEmpty() ? sourceSuffix : actualSuffix) == "webp") {
                     emit logMessage(QString("%1 转换失败：WebP 解码不可用（缺少 dwebp 或 Qt WebP 插件）").arg(sourceInfo.fileName()));
                 } else {
                     emit logMessage(QString("%1 转换失败：无法读取图片").arg(sourceInfo.fileName()));
@@ -193,7 +240,7 @@ void CompressWorker::run() {
             QString tempFormat = targetFormat;
             bool allowTempFallback = true;
             if (convertToWebp || convertToGif) {
-                tempFormat = sourceSuffix.isEmpty() ? "png" : sourceSuffix;
+                tempFormat = (!actualSuffix.isEmpty() ? actualSuffix : (sourceSuffix.isEmpty() ? "png" : sourceSuffix));
                 allowTempFallback = false;
             }
             QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));

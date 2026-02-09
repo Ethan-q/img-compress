@@ -99,7 +99,7 @@ QString detectArch() {
 QStringList collectVendorBases(const QDir &startDir, const QString &platformKey, const QString &archKey) {
     QStringList bases;
     QDir current = startDir;
-    for (int depth = 0; depth < 5; ++depth) {
+    for (int depth = 0; depth < 8; ++depth) {
         const QString vendorRoot = current.filePath("vendor");
         if (QDir(vendorRoot).exists()) {
             bases << vendorRoot
@@ -159,6 +159,18 @@ bool runProcess(const QString &program, const QStringList &args) {
     process.start();
     process.waitForFinished(-1);
     return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+QPair<bool, QString> runProcessWithOutput(const QString &program, const QStringList &args) {
+    QProcess process;
+    process.setProgram(program);
+    process.setArguments(args);
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    process.waitForFinished(-1);
+    const bool ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+    const QString output = QString::fromUtf8(process.readAllStandardOutput());
+    return qMakePair(ok, output);
 }
 
 CompressionResult copyOriginal(const QString &source, const QString &output) {
@@ -366,19 +378,34 @@ CompressionResult EngineRegistry::compressFile(
         if (gifsicle.isEmpty()) {
             return missingEngine(source, "gifsicle");
         }
-        QStringList args = {"-O3", "--no-comments", "--no-names", "--no-extensions"};
+        const QStringList baseArgs = {"-O3", "--no-comments", "--no-names", "--no-extensions"};
+        QStringList args = baseArgs;
         if (!options.lossless) {
             const int quality = qBound(1, adjustQuality(options.quality, options.profile), 100);
             int lossy = qMax(0, static_cast<int>((100 - quality) * 2));
             lossy = adjustLossy(options.profile, lossy);
             int colors = qMax(32, static_cast<int>(256 * quality / 100));
             colors = adjustColors(options.profile, colors);
-            args << "--lossy" << QString::number(lossy) << "--colors" << QString::number(colors);
+            args << QString("--lossy=%1").arg(lossy) << QString("--colors=%1").arg(colors);
         }
         args << source << "-o" << output;
-        const bool ok = runProcess(gifsicle, args);
+        auto res = runProcessWithOutput(gifsicle, args);
+        bool ok = res.first;
+        if (!ok && !options.lossless) {
+            QStringList retryArgs = baseArgs;
+            retryArgs << source << "-o" << output;
+            res = runProcessWithOutput(gifsicle, retryArgs);
+            ok = res.first;
+        }
         const qint64 outputSize = QFileInfo(output).size();
-        return {ok, originalSize, outputSize, "gifsicle", ok ? "成功" : "失败"};
+        QString msg = ok ? "成功" : "失败";
+        if (!ok) {
+            QString tail = res.second.trimmed();
+            if (!tail.isEmpty()) {
+                msg = tail;
+            }
+        }
+        return {ok, originalSize, outputSize, "gifsicle", msg};
     }
     if (suffix == "webp") {
         const QString cwebp = findTool({"cwebp"});

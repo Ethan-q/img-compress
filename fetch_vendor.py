@@ -65,13 +65,14 @@ TOOLS = {
             {"npm_package": "cwebp-bin", "mirror_name": "cwebp-bin"},
         ],
     },
-    "dwebp": {
-        "binary_names": ["dwebp"],
-        "sources": [
-            {"npm_package": "cwebp-bin", "mirror_name": "cwebp-bin"},
-            {"npm_package": "cwebp", "mirror_name": "webp"},
-        ],
-    },
+    #获取不到,注释掉
+    # "dwebp": {
+    #     "binary_names": ["dwebp"],
+    #     "sources": [
+    #         {"npm_package": "cwebp-bin", "mirror_name": "cwebp-bin"},
+    #         {"npm_package": "cwebp", "mirror_name": "webp"},
+    #     ],
+    # },
 }
 
 

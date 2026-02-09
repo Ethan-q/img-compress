@@ -92,7 +92,7 @@ private:
     QLabel *sizeLabel;
     QSlider *qualitySlider;
     QLabel *qualityValue;
-    QSpinBox *concurrencySpin;
+    QComboBox *engineLevelCombo;
     QCheckBox *formatJpg;
     QCheckBox *formatPng;
     QCheckBox *formatGif;

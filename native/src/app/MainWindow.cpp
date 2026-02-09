@@ -26,7 +26,6 @@
 #include <QProgressBar>
 #include <QSizePolicy>
 #include <QSlider>
-#include <QSpinBox>
 #include <QSet>
 #include <QTextCharFormat>
 #include <QTextCursor>
@@ -388,16 +387,17 @@ void MainWindow::setupUi() {
     optionsLayout->addRow(losslessCheck);
     optionsLayout->addRow("压缩预设", profileCombo);
     optionsLayout->addRow("有损质量", qualityLayout);
-    concurrencySpin = new QSpinBox(this);
     int idealThreads = QThread::idealThreadCount();
     if (idealThreads < 1) {
         idealThreads = 4;
     }
     const int maxThreads = qMax(1, idealThreads - 1);
-    concurrencySpin->setRange(1, maxThreads);
-    concurrencySpin->setValue(maxThreads);
-    concurrencySpin->setFixedWidth(88);
-    optionsLayout->addRow(QString("并发数(≤%1)").arg(maxThreads), concurrencySpin);
+    engineLevelCombo = new QComboBox(this);
+    for (int i = 1; i <= maxThreads; i += 1) {
+        engineLevelCombo->addItem(QString::number(i), i);
+    }
+    engineLevelCombo->setCurrentIndex(maxThreads - 1);
+    engineLevelCombo->setFixedWidth(72);
 
     auto *formatLayout = new QHBoxLayout();
     formatJpg = new QCheckBox("JPG", this);
@@ -475,6 +475,14 @@ void MainWindow::setupUi() {
 
     auto *actionLayout = new QHBoxLayout();
     actionLayout->setSpacing(10);
+    auto *concurrencyLabel = new QLabel("通道", this);
+    auto *concurrencyBox = new QWidget(this);
+    auto *concurrencyLayout = new QHBoxLayout(concurrencyBox);
+    concurrencyLayout->setContentsMargins(0, 0, 0, 0);
+    concurrencyLayout->setSpacing(6);
+    concurrencyLayout->addWidget(concurrencyLabel);
+    concurrencyLayout->addWidget(engineLevelCombo);
+    actionLayout->addWidget(concurrencyBox);
     actionLayout->addWidget(progressBar, 1);
     actionLayout->addWidget(startButton);
     optionsGroupLayout->addLayout(actionLayout);
@@ -848,7 +856,7 @@ bool MainWindow::startDirCompression(
         qualitySlider->value(),
         profileCombo->currentText(),
         outputFormat,
-        concurrencySpin->value(),
+        engineLevelCombo->currentData().toInt(),
         resizeEnabled,
         targetWidth,
         targetHeight,
@@ -897,7 +905,7 @@ bool MainWindow::startFilesCompression(
         qualitySlider->value(),
         profileCombo->currentText(),
         outputFormat,
-        concurrencySpin->value(),
+        engineLevelCombo->currentData().toInt(),
         resizeEnabled,
         targetWidth,
         targetHeight,

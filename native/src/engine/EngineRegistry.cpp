@@ -335,7 +335,14 @@ CompressionResult EngineRegistry::compressFile(
                 return {false, originalSize, originalSize, "dwebp", "执行超时"};
             }
             const qint64 outputSize = QFileInfo(output).size();
-            return {ok, originalSize, outputSize, "dwebp", ok ? "成功" : "失败"};
+            QString msg = ok ? "成功" : "失败";
+            if (!ok) {
+                const QString tail = res.second.trimmed();
+                if (!tail.isEmpty()) {
+                    msg = tail;
+                }
+            }
+            return {ok, originalSize, outputSize, "dwebp", msg};
         }
         const QString cjpeg = findTool({"cjpeg", "mozjpeg"});
         if (cjpeg.isEmpty()) {
@@ -354,7 +361,11 @@ CompressionResult EngineRegistry::compressFile(
             return {false, originalSize, originalSize, "dwebp", "执行超时"};
         }
         if (decoded.first != 0) {
-            return {false, originalSize, originalSize, "dwebp", "解码失败"};
+            QString msg = decoded.second.trimmed();
+            if (msg.isEmpty()) {
+                msg = "解码失败";
+            }
+            return {false, originalSize, originalSize, "dwebp", msg};
         }
         const int quality = options.lossless ? 100 : qBound(1, adjustQuality(options.quality, options.profile), 100);
         const QStringList encodeArgs = {
@@ -372,7 +383,14 @@ CompressionResult EngineRegistry::compressFile(
         if (res.first == -2) {
             return {false, originalSize, outputSize, "dwebp+mozjpeg", "执行超时"};
         }
-        return {ok, originalSize, outputSize, "dwebp+mozjpeg", ok ? "成功" : "失败"};
+        QString msg = ok ? "成功" : "失败";
+        if (!ok) {
+            const QString tail = res.second.trimmed();
+            if (!tail.isEmpty()) {
+                msg = tail;
+            }
+        }
+        return {ok, originalSize, outputSize, "dwebp+mozjpeg", msg};
     }
     if (suffix == "jpg") {
         if (options.lossless) {

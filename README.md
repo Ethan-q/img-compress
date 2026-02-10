@@ -56,7 +56,7 @@
 ## 打包说明（C++/Qt 发行版）
 ### 依赖与工具
 - CMake 3.20+
-- Qt 6（Qt Widgets、Qt Svg、Qt Network）
+- Qt 6（Qt Widgets、Qt Network）
 - macOS：macdeployqt
 - Windows：windeployqt、Windows 10/11 SDK、MSVC x64 工具链、Ninja（推荐）
 
@@ -68,8 +68,22 @@
 - 修改名称或标识时只需改上述 JSON，构建脚本与安装器会自动读取
 
 ### 应用图标替换
-- 直接替换文件：native/resources/icons/app.svg
-- 图标资源通过 Qt 资源打包，无需改代码
+- macOS 打包图标：native/resources/icons/app.icns
+- Windows 打包图标：native/resources/icons/app.ico
+- UI 使用系统图标（icns/ico），不再依赖 svg
+- PNG 不能直接作为系统应用图标，需要先转换为 icns/ico
+- app.svg 仅作为转换源文件，不会被打包进应用
+
+### 图标转换工具（独立，不参与打包）
+- 脚本：python native/tools/convert_icon.py
+- 依赖：rsvg-convert 或 inkscape（二选一），ImageMagick（magick/convert），macOS 需 iconutil
+- 示例：
+
+```bash
+python native/tools/convert_icon.py --svg native/resources/icons/app.svg --icns native/resources/icons/app.icns --ico native/resources/icons/app.ico
+```
+
+- 不带参数直接运行会使用默认路径
 
 ### 平台配置说明
 - Windows

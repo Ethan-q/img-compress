@@ -172,7 +172,7 @@ def deploy_qt_plugins(app_path: Path, env: dict[str, str]) -> None:
         plugin_dir,
         app_path,
         "imageformats",
-        ["libqjpeg.dylib", "libqpng.dylib", "libqgif.dylib", "libqwebp.dylib", "libqsvg.dylib"],
+        ["libqjpeg.dylib", "libqpng.dylib", "libqgif.dylib", "libqwebp.dylib"],
     )
     copy_plugin_files(plugin_dir, app_path, "styles", ["libqmacstyle.dylib"])
 

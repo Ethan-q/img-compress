@@ -299,10 +299,16 @@ def sign_app(app_path: Path, env: dict[str, str]) -> None:
     sign_item(app_path, env)
 
 
-def build_dmg(staging_dir: Path, dist_dir: Path, env: dict[str, str], app_name: str) -> Path:
+def build_dmg(
+    staging_dir: Path,
+    dist_dir: Path,
+    env: dict[str, str],
+    dmg_name: str,
+    volume_name: str,
+) -> Path:
     if shutil.which("hdiutil") is None:
         raise SystemExit("未找到 hdiutil")
-    dmg_path = dist_dir / f"{app_name}.dmg"
+    dmg_path = dist_dir / f"{dmg_name}.dmg"
     if dmg_path.exists():
         dmg_path.unlink()
     run_command(
@@ -310,7 +316,7 @@ def build_dmg(staging_dir: Path, dist_dir: Path, env: dict[str, str], app_name: 
             "hdiutil",
             "create",
             "-volname",
-            app_name,
+            volume_name,
             "-srcfolder",
             str(staging_dir),
             "-ov",
@@ -383,7 +389,8 @@ def package_for_arch(
     settings: dict[str, str | None],
     arch: str,
     build_dir: Path,
-    app_suffix: str,
+    dmg_suffix: str,
+    split_output: bool,
 ) -> None:
     arch_settings = dict(settings)
     arch_settings["architectures"] = arch
@@ -393,8 +400,9 @@ def package_for_arch(
     run_command([str(arch_settings["macdeployqt"]), str(app_path), "-no-plugins"], root_dir, env)
     deploy_qt_plugins(app_path, env, cfg, arch_settings["qt_prefix"])
     deploy_vendor(app_path, repo_dir)
-    dist_dir.mkdir(parents=True, exist_ok=True)
-    dist_app = dist_dir / f"{app_executable}{app_suffix}.app"
+    output_dir = dist_dir / arch if split_output else dist_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dist_app = output_dir / f"{app_executable}.app"
     if dist_app.exists():
         shutil.rmtree(dist_app)
     copy_app(app_path, dist_app)
@@ -402,13 +410,13 @@ def package_for_arch(
     staging_dir = Path(tempfile.mkdtemp(prefix=f"imgcompress_native_dmg_{arch}_"))
     keep_staging = env.get("KEEP_STAGING", "").lower() in {"1", "true", "yes"}
     try:
-        app_target = staging_dir / f"{app_executable}{app_suffix}.app"
+        app_target = staging_dir / f"{app_executable}.app"
         copy_app(dist_app, app_target)
         apps_link = staging_dir / "Applications"
         if apps_link.exists():
             apps_link.unlink()
         os.symlink("/Applications", apps_link)
-        dmg_path = build_dmg(staging_dir, dist_dir, env, f"{app_name}{app_suffix}")
+        dmg_path = build_dmg(staging_dir, dist_dir, env, f"{app_name}{dmg_suffix}", app_name)
         print(f"已生成：{dist_app}")
         print(f"已生成：{dmg_path}")
     finally:
@@ -444,6 +452,7 @@ def main() -> None:
                 arch,
                 root_dir / f"build_{arch}",
                 f"-{arch}",
+                True,
             )
         return
     package_for_arch(
@@ -458,6 +467,7 @@ def main() -> None:
         arch_list[0] if arch_list else "arm64",
         root_dir / "build",
         "",
+        False,
     )
 
 

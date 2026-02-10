@@ -73,11 +73,12 @@ def build_icns(svg_path: Path, output: Path) -> None:
     iconutil = shutil.which("iconutil")
     if not iconutil:
         raise SystemExit("未找到 iconutil，仅支持在 macOS 生成 icns")
-    tmp_dir = Path(tempfile.mkdtemp(prefix="iconset_"))
-    generate_iconset(svg_path, tmp_dir)
+    tmp_root = Path(tempfile.mkdtemp(prefix="iconset_"))
+    iconset_dir = tmp_root / "app.iconset"
+    generate_iconset(svg_path, iconset_dir)
     output.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([iconutil, "-c", "icns", str(tmp_dir), "-o", str(output)], check=True)
-    shutil.rmtree(tmp_dir)
+    subprocess.run([iconutil, "-c", "icns", str(iconset_dir), "-o", str(output)], check=True)
+    shutil.rmtree(tmp_root)
 
 
 def build_ico(svg_path: Path, output: Path) -> None:
@@ -86,29 +87,24 @@ def build_ico(svg_path: Path, output: Path) -> None:
     tool = magick or convert
     if not tool:
         raise SystemExit("未找到 ImageMagick（magick/convert）")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if magick:
-        cmd = [
-            tool,
-            "convert",
-            "-background",
-            "none",
-            "-define",
-            "icon:auto-resize=256,128,64,48,32,16",
-            str(svg_path),
-            str(output),
-        ]
-    else:
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ico_"))
+    sizes = [256, 128, 64, 48, 32, 16]
+    try:
+        renderer = resolve_svg_renderer()
+        for size in sizes:
+            render_png(renderer, svg_path, size, tmp_dir / f"icon_{size}x{size}.png")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        pngs = [str(tmp_dir / f"icon_{size}x{size}.png") for size in sizes]
         cmd = [
             tool,
             "-background",
             "none",
-            "-define",
-            "icon:auto-resize=256,128,64,48,32,16",
-            str(svg_path),
+            *pngs,
             str(output),
         ]
-    subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)
+    finally:
+        shutil.rmtree(tmp_dir)
 
 
 def main() -> int:

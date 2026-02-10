@@ -60,6 +60,17 @@
 - macOS：macdeployqt
 - Windows：windeployqt、Windows 10/11 SDK、MSVC x64 工具链、Ninja（推荐）
 
+### 应用名称与标识配置
+- 统一配置文件：native/app_config.json
+  - app_name：应用显示名称（窗口标题、安装器名称、dmg 卷名）
+  - app_executable：可执行文件名（mac app 与 Windows exe）
+  - bundle_identifier：macOS Bundle Identifier
+- 修改名称或标识时只需改上述 JSON，构建脚本与安装器会自动读取
+
+### 应用图标替换
+- 直接替换文件：native/resources/icons/app.svg
+- 图标资源通过 Qt 资源打包，无需改代码
+
 ### 平台配置说明
 - Windows
   - 推荐使用 Ninja 生成器
@@ -76,12 +87,12 @@
     - WINSDK_INCLUDE=D:\Windows Kits\10\Include\10.0.26100.0\ucrt;D:\Windows Kits\10\Include\10.0.26100.0\um;D:\Windows Kits\10\Include\10.0.26100.0\shared
   - 可选：VCINSTALLDIR 设置为 VS 安装目录下的 VC
   - 执行：python native/build_windows.py
-  - 产物：native/dist/ImgcompressNative.exe
+  - 产物：native/dist/<app_executable>.exe
 - macOS
   - 安装：Xcode Command Line Tools、Qt 6（macOS kits）、CMake、Ninja（可选）
   - 设置：export CMAKE_PREFIX_PATH=/path/to/Qt/6.x/macos
   - 执行：python native/build_mac.py
-  - 产物：native/dist/ImgcompressNative.app、native/dist/ImgcompressNative.dmg
+  - 产物：native/dist/<app_executable>.app、native/dist/<app_name>.dmg
 
 ### vendor 工具随包发布
 为保证一致的压缩效果，建议将二进制工具放入项目根目录 vendor/ 并随包发布：
@@ -106,12 +117,12 @@ vendor 目录结构：
 
 ### macOS 打包
 - 执行：python native/build_mac.py
-- 产物：native/dist/ImgcompressNative.app 与 native/dist/ImgcompressNative.dmg
+- 产物：native/dist/<app_executable>.app 与 native/dist/<app_name>.dmg
 - vendor 会被复制到 app/Contents/Resources/vendor
 
 ### Windows 打包
 - 执行：python native/build_windows.py
-- 产物：native/dist/ImgcompressNative.exe 与 native/dist/vendor/
+- 产物：native/dist/<app_executable>.exe 与 native/dist/vendor/
 - windeployqt 会自动部署 Qt 运行库
 
 ### Windows 安装程序生成
@@ -122,7 +133,7 @@ vendor 目录结构：
 python native\installer\windows\build_installer.py
 ```
 
-- 输出：native\installer\windows\Imgcompress-Setup.exe
+ - 输出：native\installer\windows\<app_name>-Setup.exe
 - 语言：默认显示语言选择页并按系统预选。若需中文安装器界面，将 ChineseSimplified.isl 放在 native\installer\windows\lang\ChineseSimplified.isl；否则回退英文
 - 可选签名：设置 SIGN_CERT_PFX、SIGN_CERT_PWD（可选 SIGN_TSA）后自动为 exe 与安装包签名
 - 常见问题：

@@ -58,6 +58,7 @@ def read_app_value(cfg: dict, key: str, default: str) -> str:
     return str(v) if v else default
 
 
+def resolve_iscc() -> str:
 
     v = os.environ.get("INNOSETUP_ISCC")
     if v and Path(v).exists():
@@ -73,7 +74,6 @@ def read_app_value(cfg: dict, key: str, default: str) -> str:
         w = shutil.which(name)
         if w:
             return w
-    raise SystemExit("未找到 Inno Setup 编译器 ISCC.exe，请安装 Inno Setup 或设置 INNOSETUP_ISCC 环境变量")
 
 
 def resolve_inno_compiler() -> tuple[str, str]:

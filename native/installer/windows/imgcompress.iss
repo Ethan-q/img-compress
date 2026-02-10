@@ -9,14 +9,14 @@
 AppName={#AppName}
 AppVersion=1.0.0
 AppPublisher={#AppName}
-DefaultDirName={pf}\{#AppName}
+DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableDirPage=no
 DisableProgramGroupPage=no
 OutputDir=.
 OutputBaseFilename={#AppName}-Setup
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 Compression=lzma2
 SolidCompression=yes
 LicenseFile=..\..\..\LICENSE
@@ -43,7 +43,7 @@ Source: "..\..\dist\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{commondesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "安装完成后运行"; Flags: nowait postinstall skipifsilent

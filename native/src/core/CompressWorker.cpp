@@ -15,6 +15,7 @@
 #include <QThread>
 #include <QThreadPool>
 #include <QTemporaryFile>
+#include <QScopedPointer>
 #include <QVector>
 #include <QWaitCondition>
 #include <QQueue>
@@ -86,7 +87,7 @@ TaskOutcome compressSingle(
     const bool formatMismatch = !actualSuffix.isEmpty() && actualSuffix != sourceSuffix;
     const QString effectiveSuffix = actualSuffix.isEmpty() ? sourceSuffix : actualSuffix;
     if (formatMismatch) {
-        outcome.logs << QString("%1 实际格式为 %2，与扩展名 %3 不一致，将按实际格式输出并压缩")
+        outcome.logs << QString("%1 实际格式为 %2，与扩展名 %3 不一致，将按实际格式压缩并保持文件名不变")
                             .arg(sourceInfo.fileName())
                             .arg(actualSuffix)
                             .arg(sourceSuffix);
@@ -94,7 +95,7 @@ TaskOutcome compressSingle(
     const QString rawOutputFormat = options.outputFormat.toLower();
     const QString normalizedOutputFormat = normalizeSuffix(rawOutputFormat);
     const QString targetFormat = rawOutputFormat.isEmpty() || rawOutputFormat == "original"
-        ? effectiveSuffix
+        ? sourceSuffix
         : normalizedOutputFormat;
     const QString baseName = sourceInfo.completeBaseName();
     const QString relativeDir = relativeInfo.path();
@@ -136,11 +137,20 @@ TaskOutcome compressSingle(
             QImage image = reader.read();
             if (!image.isNull()) {
                 QString tempFormat = !actualSuffix.isEmpty() ? actualSuffix : "png";
-                QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
-                temp.setAutoRemove(true);
-                if (temp.open()) {
-                    const QString tempPath = temp.fileName();
-                    temp.close();
+                QScopedPointer<QTemporaryFile> temp(new QTemporaryFile(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat)));
+                temp->setAutoRemove(true);
+                if (!temp->open()) {
+                    temp.reset(new QTemporaryFile(QDir(QDir::tempPath()).filePath("imgcompress_tmp_XXXXXX." + tempFormat)));
+                    temp->setAutoRemove(true);
+                    if (!temp->open()) {
+                        outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
+                        outcome.hasResult = false;
+                        return outcome;
+                    }
+                }
+                {
+                    const QString tempPath = temp->fileName();
+                    temp->close();
                     QImageWriter writer(tempPath, tempFormat.toLatin1());
                     const int quality = options.lossless
                         ? 100
@@ -161,34 +171,15 @@ TaskOutcome compressSingle(
                         outcome.hasResult = false;
                         return outcome;
                     }
-                } else {
-                    outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
-                    outcome.hasResult = false;
-                    return outcome;
                 }
             }
         }
     } else if (options.resizeEnabled || targetFormat != effectiveSuffix || formatMismatch) {
-        if (!options.resizeEnabled && formatMismatch && targetFormat == effectiveSuffix) {
-            QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + effectiveSuffix));
-            temp.setAutoRemove(true);
-            if (!temp.open()) {
-                outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
-                outcome.hasResult = false;
-                return outcome;
-            }
-            const QString tempPath = temp.fileName();
-            temp.close();
-            QFile::remove(tempPath);
-            if (!QFile::copy(file, tempPath)) {
-                outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
-                outcome.hasResult = false;
-                return outcome;
-            }
-            outcome.result = EngineRegistry::compressFile(tempPath, outputPath, options);
+        if (!options.resizeEnabled && formatMismatch) {
+            outcome.result = EngineRegistry::compressFile(file, outputPath, options);
             if (!outcome.result.success) {
                 QFile::remove(outputPath);
-                QFile::copy(tempPath, outputPath);
+                QFile::copy(file, outputPath);
                 outcome.result = {true, sourceSize, QFileInfo(outputPath).size(), "原图", "已按实际格式输出"};
             } else {
                 outcome.result.originalSize = sourceSize;
@@ -238,16 +229,7 @@ TaskOutcome compressSingle(
                 tempFormat = effectiveSuffix.isEmpty() ? "png" : effectiveSuffix;
                 allowTempFallback = false;
             }
-            QTemporaryFile temp(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat));
-            temp.setAutoRemove(true);
-            if (!temp.open()) {
-                outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
-                outcome.hasResult = false;
-                return outcome;
-            }
-            const QString tempPath = temp.fileName();
-            temp.close();
-            QImageWriter writer(tempPath, tempFormat.toLatin1());
+            QImageWriter writer(outputPath, tempFormat.toLatin1());
             const int quality = options.lossless
                 ? 100
                 : qBound(1, adjustQuality(options.quality, options.profile), 100);
@@ -257,18 +239,47 @@ TaskOutcome compressSingle(
                 outcome.hasResult = false;
                 return outcome;
             }
-            outcome.result = EngineRegistry::compressFile(tempPath, outputPath, options);
-            if (!outcome.result.success && allowTempFallback) {
-                QFile::remove(outputPath);
-                QFile::copy(tempPath, outputPath);
-                outcome.result = {true, sourceSize, QFileInfo(outputPath).size(), "Qt", "已转换"};
-            } else {
-                outcome.result.originalSize = sourceSize;
-                outcome.result.outputSize = QFileInfo(outputPath).size();
-            }
+            outcome.result = EngineRegistry::compressFile(outputPath, outputPath, options);
+            outcome.result.originalSize = sourceSize;
+            outcome.result.outputSize = QFileInfo(outputPath).size();
         }
     } else {
         outcome.result = EngineRegistry::compressFile(file, outputPath, options);
+        if (!outcome.result.success && effectiveSuffix == "jpg") {
+            QImageReader reader(file);
+            reader.setAutoTransform(true);
+            QImage image = reader.read();
+            if (!image.isNull()) {
+                const QString tempFormat = "jpg";
+                QScopedPointer<QTemporaryFile> temp(new QTemporaryFile(outputRoot.filePath(".imgcompress_tmp_XXXXXX." + tempFormat)));
+                temp->setAutoRemove(true);
+                if (!temp->open()) {
+                    temp.reset(new QTemporaryFile(QDir(QDir::tempPath()).filePath("imgcompress_tmp_XXXXXX." + tempFormat)));
+                    temp->setAutoRemove(true);
+                    if (!temp->open()) {
+                        outcome.logs << QString("%1 转换失败：无法创建临时文件").arg(sourceInfo.fileName());
+                        outcome.hasResult = false;
+                        return outcome;
+                    }
+                }
+                const QString tempPath = temp->fileName();
+                temp->close();
+                QImageWriter writer(tempPath, tempFormat.toLatin1());
+                const int quality = options.lossless
+                    ? 100
+                    : qBound(1, adjustQuality(options.quality, options.profile), 100);
+                writer.setQuality(quality);
+                if (writer.write(image)) {
+                    QFile::remove(outputPath);
+                    QFile::copy(tempPath, outputPath);
+                    outcome.result = {true, sourceSize, QFileInfo(outputPath).size(), "Qt", "已压缩"};
+                } else {
+                    outcome.logs << QString("%1 转换失败：无法写入格式").arg(sourceInfo.fileName());
+                    outcome.hasResult = false;
+                    return outcome;
+                }
+            }
+        }
     }
     if (outcome.result.success && outcome.result.outputSize > outcome.result.originalSize) {
         QFile::remove(outputPath);

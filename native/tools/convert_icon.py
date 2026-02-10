@@ -91,8 +91,29 @@ def build_ico(svg_path: Path, output: Path) -> None:
     sizes = [256, 128, 64, 48, 32, 16]
     try:
         renderer = resolve_svg_renderer()
+        master_size = 256
+        master_png = tmp_dir / f"icon_{master_size}x{master_size}.png"
+        render_png(renderer, svg_path, master_size, master_png)
         for size in sizes:
-            render_png(renderer, svg_path, size, tmp_dir / f"icon_{size}x{size}.png")
+            out_png = tmp_dir / f"icon_{size}x{size}.png"
+            if size == master_size:
+                master_png.replace(out_png)
+                master_png = out_png
+                continue
+            resize_cmd = [
+                tool,
+                str(master_png),
+                "-filter",
+                "lanczos",
+                "-define",
+                "filter:blur=0.9",
+                "-resize",
+                f"{size}x{size}",
+                "-unsharp",
+                "0x0.5+0.5+0.008",
+                str(out_png),
+            ]
+            subprocess.run(resize_cmd, check=True)
         output.parent.mkdir(parents=True, exist_ok=True)
         pngs = [str(tmp_dir / f"icon_{size}x{size}.png") for size in sizes]
         cmd = [

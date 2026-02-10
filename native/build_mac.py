@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 import shutil
 import subprocess
@@ -26,15 +27,31 @@ def run_command(command: list[str], cwd: Path, env: dict[str, str] | None = None
         raise SystemExit(process.returncode)
 
 
-def resolve_app(build_dir: Path) -> Path:
+def load_app_config(root: Path) -> dict:
+    cfg_path = root / "app_config.json"
+    if cfg_path.exists():
+        try:
+            return json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def read_app_value(cfg: dict, key: str, default: str) -> str:
+    v = cfg.get(key)
+    return str(v) if v else default
+
+
+def resolve_app(build_dir: Path, app_executable: str) -> Path:
+    app_name = f"{app_executable}.app"
     candidates = [
-        build_dir / "ImgcompressNative.app",
-        build_dir / "Release" / "ImgcompressNative.app",
+        build_dir / app_name,
+        build_dir / "Release" / app_name,
     ]
     for candidate in candidates:
         if candidate.exists():
             return candidate
-    raise SystemExit("未找到 ImgcompressNative.app")
+    raise SystemExit(f"未找到 {app_name}")
 
 
 def resolve_qtpaths(env: dict[str, str]) -> str:
@@ -155,7 +172,7 @@ def deploy_qt_plugins(app_path: Path, env: dict[str, str]) -> None:
         plugin_dir,
         app_path,
         "imageformats",
-        ["libqjpeg.dylib", "libqpng.dylib", "libqgif.dylib", "libqwebp.dylib"],
+        ["libqjpeg.dylib", "libqpng.dylib", "libqgif.dylib", "libqwebp.dylib", "libqsvg.dylib"],
     )
     copy_plugin_files(plugin_dir, app_path, "styles", ["libqmacstyle.dylib"])
 
@@ -197,10 +214,10 @@ def sign_app(app_path: Path, env: dict[str, str]) -> None:
     sign_item(app_path, env)
 
 
-def build_dmg(staging_dir: Path, dist_dir: Path, env: dict[str, str]) -> Path:
+def build_dmg(staging_dir: Path, dist_dir: Path, env: dict[str, str], app_name: str) -> Path:
     if shutil.which("hdiutil") is None:
         raise SystemExit("未找到 hdiutil")
-    dmg_path = dist_dir / "ImgcompressNative.dmg"
+    dmg_path = dist_dir / f"{app_name}.dmg"
     if dmg_path.exists():
         dmg_path.unlink()
     run_command(
@@ -208,7 +225,7 @@ def build_dmg(staging_dir: Path, dist_dir: Path, env: dict[str, str]) -> Path:
             "hdiutil",
             "create",
             "-volname",
-            "ImgcompressNative",
+            app_name,
             "-srcfolder",
             str(staging_dir),
             "-ov",
@@ -227,6 +244,9 @@ def build_dmg(staging_dir: Path, dist_dir: Path, env: dict[str, str]) -> Path:
 def main() -> None:
     root_dir = Path(__file__).resolve().parent
     repo_dir = root_dir.parent
+    app_cfg = load_app_config(root_dir)
+    app_name = read_app_value(app_cfg, "app_name", "Imgcompress")
+    app_executable = read_app_value(app_cfg, "app_executable", "ImgcompressNative")
     build_dir = root_dir / "build"
     dist_dir = root_dir / "dist"
     env = dict(os.environ)
@@ -244,12 +264,12 @@ def main() -> None:
         env,
     )
     run_command(["cmake", "--build", str(build_dir), "--config", "Release"], root_dir, env)
-    app_path = resolve_app(build_dir)
+    app_path = resolve_app(build_dir, app_executable)
     run_command(["macdeployqt", str(app_path), "-no-plugins"], root_dir, env)
     deploy_qt_plugins(app_path, env)
     deploy_vendor(app_path, repo_dir)
     dist_dir.mkdir(parents=True, exist_ok=True)
-    dist_app = dist_dir / "ImgcompressNative.app"
+    dist_app = dist_dir / f"{app_executable}.app"
     if dist_app.exists():
         shutil.rmtree(dist_app)
     copy_app(app_path, dist_app)
@@ -257,13 +277,13 @@ def main() -> None:
     staging_dir = Path(tempfile.mkdtemp(prefix="imgcompress_native_dmg_"))
     keep_staging = env.get("KEEP_STAGING", "").lower() in {"1", "true", "yes"}
     try:
-        app_target = staging_dir / "ImgcompressNative.app"
+        app_target = staging_dir / f"{app_executable}.app"
         copy_app(dist_app, app_target)
         apps_link = staging_dir / "Applications"
         if apps_link.exists():
             apps_link.unlink()
         os.symlink("/Applications", apps_link)
-        dmg_path = build_dmg(staging_dir, dist_dir, env)
+        dmg_path = build_dmg(staging_dir, dist_dir, env, app_name)
         print(f"已生成：{dist_app}")
         print(f"已生成：{dmg_path}")
     finally:

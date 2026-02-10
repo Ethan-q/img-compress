@@ -65,6 +65,21 @@ def load_config(root: Path) -> dict:
     return cfg
 
 
+def load_app_config(root: Path) -> dict:
+    cfg_path = root / "app_config.json"
+    if cfg_path.exists():
+        try:
+            return json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def read_app_value(cfg: dict, key: str, default: str) -> str:
+    v = cfg.get(key)
+    return str(v) if v else default
+
+
 def cfg_get(cfg: dict, name: str) -> str | None:
     v = os.environ.get(name)
     if v:
@@ -150,11 +165,12 @@ def resolve_qt_prefix(cfg: dict) -> str | None:
     return str(Path(v)).replace("\\", "/")
 
 
-def resolve_exe(build_dir: Path) -> Path:
-    for p in [build_dir / "ImgcompressNative.exe", build_dir / "Release" / "ImgcompressNative.exe"]:
+def resolve_exe(build_dir: Path, exe_name: str) -> Path:
+    target = f"{exe_name}.exe"
+    for p in [build_dir / target, build_dir / "Release" / target]:
         if p.exists():
             return p
-    raise SystemExit("未找到 ImgcompressNative.exe")
+    raise SystemExit(f"未找到 {target}")
 
 
 def compose_env(cfg: dict) -> dict[str, str]:
@@ -196,6 +212,8 @@ def compose_env(cfg: dict) -> dict[str, str]:
 def main() -> None:
     root = Path(__file__).resolve().parent
     repo = root.parent
+    app_cfg = load_app_config(root)
+    app_executable = read_app_value(app_cfg, "app_executable", "ImgcompressNative")
     build = root / "build"
     dist = root / "dist"
     cfg = load_config(root)
@@ -223,9 +241,9 @@ def main() -> None:
         env,
     )
     run_command([cmake, "--build", str(build), "--config", "Release"], root, env)
-    exe = resolve_exe(build)
+    exe = resolve_exe(build, app_executable)
     dist.mkdir(parents=True, exist_ok=True)
-    out = dist / "ImgcompressNative.exe"
+    out = dist / f"{app_executable}.exe"
     shutil.copy2(exe, out)
     wqt = resolve_tool("windeployqt", ["WINDEPLOYQT_EXE", "WINDEPLOYQT"], ["windeployqt.exe", "windeployqt", "windeployqt.bat", "windeployqt.cmd"])
     run_command([wqt, str(out)], root, env)

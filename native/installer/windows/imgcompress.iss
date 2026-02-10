@@ -1,14 +1,20 @@
-; Inno Setup script for Imgcompress Windows installer
+#ifndef AppName
+  #error AppName 未定义
+#endif
+#ifndef AppExeName
+  #error AppExeName 未定义
+#endif
+
 [Setup]
-AppName=Imgcompress
+AppName={#AppName}
 AppVersion=1.0.0
-AppPublisher=Imgcompress
-DefaultDirName={pf}\Imgcompress
-DefaultGroupName=Imgcompress
+AppPublisher={#AppName}
+DefaultDirName={pf}\{#AppName}
+DefaultGroupName={#AppName}
 DisableDirPage=no
 DisableProgramGroupPage=no
 OutputDir=.
-OutputBaseFilename=Imgcompress-Setup
+OutputBaseFilename={#AppName}-Setup
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 Compression=lzma2
@@ -36,8 +42,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: unchecked
 Source: "..\..\dist\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Imgcompress"; Filename: "{app}\ImgcompressNative.exe"
-Name: "{userdesktop}\Imgcompress"; Filename: "{app}\ImgcompressNative.exe"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
+Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\ImgcompressNative.exe"; Description: "安装完成后运行"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Description: "安装完成后运行"; Flags: nowait postinstall skipifsilent

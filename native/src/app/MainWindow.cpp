@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QAbstractItemView>
+#include <QApplication>
 #include <QBrush>
 #include <QCheckBox>
 #include <QComboBox>
@@ -128,7 +129,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), isRunning(false) 
 }
 
 void MainWindow::setupUi() {
-    setWindowTitle("Imgcompress Native");
+    setWindowTitle(QApplication::applicationDisplayName());
     resize(980, 640);
     setStyleSheet(QStringLiteral(
         "QMainWindow { background: #f3f4f6; }"

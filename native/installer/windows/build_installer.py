@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 import shutil
 import subprocess
@@ -42,7 +43,22 @@ def run_command(command: list[str], cwd: Path) -> None:
         raise SystemExit(p.returncode)
 
 
-def resolve_iscc() -> str:
+def load_app_config(root: Path) -> dict:
+    cfg_path = root / "app_config.json"
+    if cfg_path.exists():
+        try:
+            return json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def read_app_value(cfg: dict, key: str, default: str) -> str:
+    v = cfg.get(key)
+    return str(v) if v else default
+
+
+
     v = os.environ.get("INNOSETUP_ISCC")
     if v and Path(v).exists():
         return v
@@ -144,15 +160,19 @@ def main() -> None:
     script_dir = Path(__file__).resolve().parent
     native_dir = script_dir.parents[1]
     repo = native_dir.parent
+    app_cfg = load_app_config(native_dir)
+    app_name = read_app_value(app_cfg, "app_name", "Imgcompress")
+    app_executable = read_app_value(app_cfg, "app_executable", "ImgcompressNative")
     iss = script_dir / "imgcompress.iss"
     if not iss.exists():
         raise SystemExit("未找到安装脚本 imgcompress.iss")
     run_command([sys.executable, str(native_dir / "build_windows.py")], repo)
     compiler, mode = resolve_inno_compiler()
+    defs = [f"/DAppName={app_name}", f"/DAppExeName={app_executable}.exe"]
     if mode == "iscc":
-        run_command([compiler, str(iss)], repo)
+        run_command([compiler, *defs, str(iss)], repo)
     else:
-        run_command([compiler, "/cc", str(iss)], repo)
+        run_command([compiler, "/cc", *defs, str(iss)], repo)
     out_dir = script_dir
     installer = None
     latest_time = 0.0
@@ -168,7 +188,7 @@ def main() -> None:
         signtool = resolve_signtool()
         if not signtool:
             raise SystemExit("请求签名但未找到 signtool，请安装 Windows SDK 或将 signtool 加入 PATH")
-        app_exe = native_dir / "dist" / "ImgcompressNative.exe"
+        app_exe = native_dir / "dist" / f"{app_executable}.exe"
         if app_exe.exists():
             sign_file(signtool, app_exe, cert_pfx, cert_pwd, tsa)
         if installer and installer.exists():

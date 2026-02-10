@@ -661,10 +661,11 @@ void MainWindow::startCompression() {
 
 void MainWindow::onLogMessage(const QString &message) {
     QTextCharFormat format;
+    const QString trimmed = message.trimmed();
     if (message.contains("实际格式为") && message.contains("不一致")) {
         format.setForeground(QColor("#f59e0b"));
     } else {
-        format.setForeground(message.contains("失败") ? QColor("#ef4444") : QColor("#e5e7eb"));
+        format.setForeground(trimmed.startsWith("失败") ? QColor("#ef4444") : QColor("#e5e7eb"));
     }
     QTextCursor cursor = logArea->textCursor();
     cursor.movePosition(QTextCursor::End);

@@ -353,46 +353,6 @@ def resolve_build_settings(cfg: dict, env: dict[str, str]) -> dict[str, str | No
     }
 
 
-def should_clean_build(build_dir: Path, qt_prefix: str | None) -> bool:
-    if not qt_prefix:
-        return False
-    cache_path = build_dir / "CMakeCache.txt"
-    if not cache_path.exists():
-        return False
-    cache_text = cache_path.read_text(encoding="utf-8", errors="ignore")
-    brew_markers = (
-        "/opt/homebrew/opt/qt",
-        "/opt/homebrew/opt/qtbase",
-        "/usr/local/opt/qt",
-        "/usr/local/opt/qtbase",
-    )
-    return any(marker in cache_text for marker in brew_markers)
-
-
-def ensure_clean_build_dir(build_dir: Path, qt_prefix: str | None) -> None:
-    if should_clean_build(build_dir, qt_prefix) and build_dir.exists():
-        shutil.rmtree(build_dir)
-
-
-def parse_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def parse_arch_list(architectures: str) -> list[str]:
-    if not architectures:
-        return []
-    parts = []
-    for chunk in architectures.replace(",", ";").split(";"):
-        item = chunk.strip()
-        if item:
-            parts.append(item)
-    return parts
-
-
 def build_cmake_args(root_dir: Path, build_dir: Path, settings: dict[str, str | None]) -> list[str]:
     args = [
         str(settings["cmake"]),
@@ -422,12 +382,11 @@ def package_for_arch(
     cfg: dict,
     settings: dict[str, str | None],
     arch: str,
-    split: bool,
+    build_dir: Path,
+    app_suffix: str,
 ) -> None:
-    build_dir = root_dir / f"build_{arch}" if split else root_dir / "build"
     arch_settings = dict(settings)
     arch_settings["architectures"] = arch
-    ensure_clean_build_dir(build_dir, arch_settings["qt_prefix"])
     run_command(build_cmake_args(root_dir, build_dir, arch_settings), root_dir, env)
     run_command([str(arch_settings["cmake"]), "--build", str(build_dir), "--config", "Release"], root_dir, env)
     app_path = resolve_app(build_dir, app_executable)
@@ -435,7 +394,6 @@ def package_for_arch(
     deploy_qt_plugins(app_path, env, cfg, arch_settings["qt_prefix"])
     deploy_vendor(app_path, repo_dir)
     dist_dir.mkdir(parents=True, exist_ok=True)
-    app_suffix = f"-{arch}" if split else ""
     dist_app = dist_dir / f"{app_executable}{app_suffix}.app"
     if dist_app.exists():
         shutil.rmtree(dist_app)
@@ -450,8 +408,7 @@ def package_for_arch(
         if apps_link.exists():
             apps_link.unlink()
         os.symlink("/Applications", apps_link)
-        dmg_name = f"{app_name}{app_suffix}"
-        dmg_path = build_dmg(staging_dir, dist_dir, env, dmg_name)
+        dmg_path = build_dmg(staging_dir, dist_dir, env, f"{app_name}{app_suffix}")
         print(f"已生成：{dist_app}")
         print(f"已生成：{dmg_path}")
     finally:
@@ -470,8 +427,9 @@ def main() -> None:
     dist_dir = root_dir / "dist"
     env = dict(os.environ)
     settings = resolve_build_settings(cfg, env)
-    split_arch = parse_bool(cfg_get(cfg, "SPLIT_ARCH_PACKAGES") or env.get("SPLIT_ARCH_PACKAGES"))
-    arch_list = parse_arch_list(str(settings["architectures"]))
+    split_raw = cfg_get(cfg, "SPLIT_ARCH_PACKAGES") or env.get("SPLIT_ARCH_PACKAGES")
+    split_arch = str(split_raw).strip().lower() in {"1", "true", "yes", "on"}
+    arch_list = [item.strip() for item in str(settings["architectures"]).replace(",", ";").split(";") if item.strip()]
     if split_arch and len(arch_list) > 1:
         for arch in arch_list:
             package_for_arch(
@@ -484,7 +442,8 @@ def main() -> None:
                 cfg,
                 settings,
                 arch,
-                True,
+                root_dir / f"build_{arch}",
+                f"-{arch}",
             )
         return
     package_for_arch(
@@ -497,7 +456,8 @@ def main() -> None:
         cfg,
         settings,
         arch_list[0] if arch_list else "arm64",
-        False,
+        root_dir / "build",
+        "",
     )
 
 

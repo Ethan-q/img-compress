@@ -56,9 +56,34 @@
 ## 打包说明（C++/Qt 发行版）
 ### 依赖与工具
 - CMake 3.20+
-- Qt 6（Qt Widgets、Qt Svg、Qt Network）
+- Qt 6（Qt Widgets、Qt Network）
 - macOS：macdeployqt
 - Windows：windeployqt、Windows 10/11 SDK、MSVC x64 工具链、Ninja（推荐）
+
+### 应用名称与标识配置
+- 统一配置文件：native/app_config.json
+  - app_name：应用显示名称（窗口标题、安装器名称、dmg 卷名）
+  - app_executable：可执行文件名（mac app 与 Windows exe）
+  - bundle_identifier：macOS Bundle Identifier
+- 修改名称或标识时只需改上述 JSON，构建脚本与安装器会自动读取
+
+### 应用图标替换
+- macOS 打包图标：native/resources/icons/app.icns
+- Windows 打包图标：native/resources/icons/app.ico
+- UI 使用系统图标（icns/ico），不再依赖 svg
+- PNG 不能直接作为系统应用图标，需要先转换为 icns/ico
+- app.svg 仅作为转换源文件，不会被打包进应用
+
+### 图标转换工具（独立，不参与打包）
+- 脚本：python native/tools/convert_icon.py
+- 依赖：rsvg-convert 或 inkscape（二选一），ImageMagick（magick/convert），macOS 需 iconutil
+- 示例：
+
+```bash
+python native/tools/convert_icon.py --svg native/resources/icons/app.svg --icns native/resources/icons/app.icns --ico native/resources/icons/app.ico
+```
+
+- 不带参数直接运行会使用默认路径
 
 ### 平台配置说明
 - Windows
@@ -76,12 +101,12 @@
     - WINSDK_INCLUDE=D:\Windows Kits\10\Include\10.0.26100.0\ucrt;D:\Windows Kits\10\Include\10.0.26100.0\um;D:\Windows Kits\10\Include\10.0.26100.0\shared
   - 可选：VCINSTALLDIR 设置为 VS 安装目录下的 VC
   - 执行：python native/build_windows.py
-  - 产物：native/dist/ImgcompressNative.exe
+  - 产物：native/dist/<app_executable>.exe
 - macOS
   - 安装：Xcode Command Line Tools、Qt 6（macOS kits）、CMake、Ninja（可选）
   - 设置：export CMAKE_PREFIX_PATH=/path/to/Qt/6.x/macos
   - 执行：python native/build_mac.py
-  - 产物：native/dist/ImgcompressNative.app、native/dist/ImgcompressNative.dmg
+  - 产物：native/dist/<app_executable>.app、native/dist/<app_name>.dmg
 
 ### vendor 工具随包发布
 为保证一致的压缩效果，建议将二进制工具放入项目根目录 vendor/ 并随包发布：
@@ -106,12 +131,12 @@ vendor 目录结构：
 
 ### macOS 打包
 - 执行：python native/build_mac.py
-- 产物：native/dist/ImgcompressNative.app 与 native/dist/ImgcompressNative.dmg
+- 产物：native/dist/<app_executable>.app 与 native/dist/<app_name>.dmg
 - vendor 会被复制到 app/Contents/Resources/vendor
 
 ### Windows 打包
 - 执行：python native/build_windows.py
-- 产物：native/dist/ImgcompressNative.exe 与 native/dist/vendor/
+- 产物：native/dist/<app_executable>.exe 与 native/dist/vendor/
 - windeployqt 会自动部署 Qt 运行库
 
 ### Windows 安装程序生成
@@ -122,7 +147,7 @@ vendor 目录结构：
 python native\installer\windows\build_installer.py
 ```
 
-- 输出：native\installer\windows\Imgcompress-Setup.exe
+ - 输出：native\installer\windows\<app_name>-Setup.exe
 - 语言：默认显示语言选择页并按系统预选。若需中文安装器界面，将 ChineseSimplified.isl 放在 native\installer\windows\lang\ChineseSimplified.isl；否则回退英文
 - 可选签名：设置 SIGN_CERT_PFX、SIGN_CERT_PWD（可选 SIGN_TSA）后自动为 exe 与安装包签名
 - 常见问题：
